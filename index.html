@@ -1237,7 +1237,7 @@ async function sync(){
   if(!navigator.onLine){renderStatus();return}
   if(syncing){syncAgain=true;return}
   syncing=true;renderStatus();
-  try{const {data}=await sb.auth.getSession();
+  try{const r=await Promise.race([sb.auth.getSession(),new Promise((_,ko)=>setTimeout(()=>ko(new Error('délai dépassé')),15000))]);const data=r.data;
     if(!data.session||data.session.user.id!==S.user.id){syncErr='session';return}
     await push();const changed=await pull();lastSync=new Date();syncErr='';recomputeStock();save();
     const typing=document.activeElement&&document.activeElement.closest&&document.activeElement.closest('#view input');
@@ -1274,11 +1274,14 @@ async function boot(){
   S=st;
   if(S){if(!S.dirty&&S.mode==='compte'){S.dirty=blank();S.tomb=blank()}S.mvts=S.mvts||[];if(S.dirty){S.dirty.mvts=S.dirty.mvts||{};S.tomb.mvts=S.tomb.mvts||{}}recomputeStock()}
   {const h=location.hash.slice(1);if(S&&(h==='vente'||h==='achat'))view=h;if(h)history.replaceState(null,'',location.pathname)}
-  if(S&&S.mode==='compte'&&sb){try{const {data}=await sb.auth.getSession();const u=data.session&&data.session.user;
-    if(u&&u.id===S.user.id&&u.user_metadata&&u.user_metadata.must_change)mustChange=true}catch(e){}}
   render();
-  if(S&&S.mode==='compte'){sync();checkAdmin()}
+  if(S&&S.mode==='compte'){sync();checkAdmin();verifCodeProvisoire()}
 }
+// Vérifié après l'affichage, avec une limite de temps : l'écran ne reste jamais vide
+async function verifCodeProvisoire(){if(!sb)return;
+  try{const r=await Promise.race([sb.auth.getSession(),new Promise(ok=>setTimeout(()=>ok(null),4000))]);
+    const u=r&&r.data&&r.data.session&&r.data.session.user;
+    if(u&&S&&u.id===S.user.id&&u.user_metadata&&u.user_metadata.must_change&&!mustChange){mustChange=true;render()}}catch(e){}}
 boot();
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
