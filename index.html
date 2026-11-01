@@ -206,6 +206,8 @@ nav.tabs button.on .ic{stroke-width:2.4}
 .meter{height:6px;border-radius:3px;background:var(--bg);margin-top:8px;overflow:hidden}
 .meter i{display:block;height:100%;background:var(--accent);border-radius:3px}
 .rank{width:26px;flex:none;color:var(--muted);font-weight:700;font-variant-numeric:tabular-nums}
+.daterow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:-6px 0 12px;color:var(--muted);font-size:15px}
+.linkbtn{color:var(--accent);font-weight:700;text-decoration:underline;font-size:15px;min-height:40px}
 .alivr{color:var(--accent)}
 input[type="date"]{min-height:52px;-webkit-appearance:none;appearance:none}
 .pill.neutral{background:var(--bg);color:var(--muted)}
@@ -308,6 +310,13 @@ function livrLabel(s){if(!s)return 'Date non fixée';const k=dayDiff(s),d=dayOf(
   if(k<0)return `En retard · ${d.toLocaleDateString('fr-FR',{day:'numeric',month:'short'})}`;if(k===0)return "Aujourd'hui";if(k===1)return 'Demain';
   return d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'short'})}
 function livrQuand(s){if(!s)return 'bientôt';const k=dayDiff(s);return k===0?"aujourd'hui":k===1?'demain':'le '+dayOf(s).toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}
+const today=()=>isoDay(new Date());
+// Champ date (aujourd'hui par défaut, pas de date future)
+const dateField=(id,val,oninput='',label='Date')=>`<label class="field" for="${id}">${label}<input id="${id}" type="date" value="${val||today()}" max="${today()}" ${oninput?`oninput="${oninput}"`:''}></label>`;
+// Date choisie → horodatage : maintenant si aujourd'hui, sinon midi ce jour-là
+function dateISO(v){if(!v||v>=today())return new Date().toISOString();const d=dayOf(v);d.setHours(12,0,0,0);return d.toISOString()}
+const dateVal=id=>{const el=$('#'+id);return el?el.value:''};
+const flongAn=iso=>new Date(iso).toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
 const livrLate=s=>!!s&&dayDiff(s)<0;
 const initials=s=>String(s).replace(/\(.*?\)/g,'').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
 
@@ -534,6 +543,7 @@ function coHtml(){const isV=cart.type==='vente';const tot=cartTotal();const r=Ma
     ${co.paye>0?modeSeg('comode',co.mode):''}
     <div id="reste" class="restebox ${r?'is-debt':''}">${resteHtml(r,isV)}</div>
     ${co.err?`<p class="err">${co.err}</p>${co.needContact?`<button class="btn" onclick="pickContact(true)">${isV?'Choisir le client':'Choisir le fournisseur'}</button>`:''}`:''}
+    ${dateField('codate',co.odate,'co.odate=this.value',isV?'Date de la vente':"Date de l'achat")}
     <button class="btn primary" onclick="coSave()">Enregistrer ${isV?'la vente':"l'achat"}</button>
   </div>`}
 function coPaye(v){const tot=cartTotal();co.paye=Math.min(num(v),tot);const r=tot-co.paye;const el=$('#reste');el.className='restebox '+(r?'is-debt':'');el.innerHTML=resteHtml(r,cart.type==='vente');
@@ -548,7 +558,7 @@ function coSave(){const isV=cart.type==='vente';const tot=cartTotal();const p=Ma
   if(isV&&co.livr==='a_livrer'&&!cart.contactId){co.err="Une vente à livrer a besoin d'un client, pour savoir à qui livrer.";co.needContact=true;coRender();return}
   if(!isV&&!cart.contactId){co.err='Choisissez le fournisseur.';co.needContact=true;sheetSet(coHtml());return}
   if(isV&&!cart.contactId&&p<tot){co.err="Une vente à crédit a besoin d'un client, pour savoir qui doit l'argent.";co.needContact=true;sheetSet(coHtml());return}
-  const now=new Date().toISOString();
+  const now=dateISO(co.odate);
   const lignes=Object.entries(cart.lines).map(([id,q])=>{const a=A(id);return{aid:id,nom:a.nom,qte:q,prix:prixDe(a,cart.type),cout:a.pa,...(isFab(a)?{fab:true}:{})}});
   const op={id:uid(),type:cart.type,contactId:cart.contactId,date:now,lignes,total:tot,paiements:p>0?[{date:now,montant:p,mode:co.mode}]:[]};
   op.paiements.forEach(x=>x.id=uid());
@@ -560,6 +570,7 @@ function coSave(){const isV=cart.type==='vente';const tot=cartTotal();const p=Ma
 function opSheet(id){const o=S.ops.find(x=>x.id===id);if(!o)return;const c=o.contactId&&C(o.contactId);const r=reste(o);const isV=o.type==='vente',isD=o.type==='depense';
   openSheet(`<h3>${TYPE_LBL[o.type]} · ${fdate(o.date)}</h3>
   <p class="sub" style="margin:-8px 0 12px">${c?`<button onclick="closeSheet();go('contact','${c.id}')" style="text-decoration:underline;color:var(--fg);font-weight:700">${esc(c.nom)}</button>`:isV?'Client de passage':isD?'Sans fournisseur':''}</p>
+  <div id="opdate" class="daterow"><span>${flongAn(o.date)}</span><button class="linkbtn" onclick="opDateEdit('${o.id}')">Modifier la date</button></div>
   ${isV&&o.livraison==='a_livrer'?`<div class="restebox ${livrLate(o.livraison_prevue)?'is-debt':''}" style="margin-bottom:10px">À livrer · ${livrLabel(o.livraison_prevue)}${o.livraison_note?`<div class="sub">${esc(o.livraison_note)}</div>`:''}</div>
     <div class="actions" style="margin:0 0 14px"><button class="btn" onclick="livrer('${o.id}',1)">Marquer comme livré</button>${c?`<button class="btn" onclick="prevenirLivr('${o.id}')">${I.msg}Prévenir le client</button>`:''}</div>`
     :isV&&o.livre_le?`<p class="sub" style="margin:-4px 0 12px">Livré le ${flong(o.livre_le)}</p>`:''}
@@ -569,9 +580,18 @@ function opSheet(id){const o=S.ops.find(x=>x.id===id);if(!o)return;const c=o.con
   ${o.paiements.length?`<h4>Versements</h4><div class="list card">${o.paiements.map(p=>`<button class="row" onclick="payAsk('${o.id}','${p.id}')"><div class="main"><div class="title">${fdate(p.date)}</div><div class="sub">${p.mode}</div></div><span class="amt">${fmt(p.montant)}</span></button>`).join('')}</div>
     <p class="sub small" style="margin:6px 2px 0">Touchez un versement pour le supprimer.</p><div id="paydel"></div>`:''}
   ${r?`<h4>Ajouter un versement</h4><div class="stack"><label class="field" for="oppay">${isV?'Montant reçu':'Montant payé'}<input id="oppay" inputmode="numeric" value="${r}"></label>${modeSeg('opmode')}
+    ${dateField('oppdate')}
     <button class="btn primary" onclick="opAddPay('${o.id}')">Enregistrer le versement</button></div>`:''}
   ${isV&&c?`<div style="margin-top:12px"><button class="btn" onclick="recuSheet('${o.id}')">${I.msg}Envoyer le reçu sur WhatsApp</button></div>`:''}
   <div id="opdel" style="margin-top:24px"><button class="btn danger" onclick="opDel('${o.id}')">Supprimer ${OP_CE[o.type]}</button></div>`)}
+function opDateEdit(id){const o=S.ops.find(x=>x.id===id);
+  $('#opdate').outerHTML=`<div id="opdate" class="card pad stack" style="margin-bottom:14px">${dateField('opnewdate',isoDay(o.date),'',"Nouvelle date")}
+    <div class="row2"><button class="btn" onclick="opSheet('${id}')">Annuler</button><button class="btn primary" onclick="opDateSave('${id}')">Enregistrer</button></div></div>`}
+function opDateSave(id){const o=S.ops.find(x=>x.id===id),v=dateVal('opnewdate');if(!v)return;
+  const old=o.date,nd=v===isoDay(old)?old:dateISO(v);if(nd===old){opSheet(id);return}
+  // Les versements faits le même jour que l'opération suivent la nouvelle date
+  o.paiements.forEach(p=>{if(isoDay(p.date)===isoDay(old)){p.date=nd;touch('paiements',p.id)}});
+  o.date=nd;touch('ops',id);commit();render();opSheet(id);toast('Date modifiée')}
 const OP_CE={vente:'cette vente',achat:'cet achat',depense:'cette dépense'};
 function opDel(id,ok){const o=S.ops.find(x=>x.id===id);if(!o)return;
   if(!ok){$('#opdel').innerHTML=`<p style="margin:0 0 10px"><b>Supprimer ${OP_CE[o.type]} ?</b> ${o.paiements.length?'Ses versements seront aussi supprimés. ':''}${o.type==='depense'?'Les dettes':'Le stock, les dettes'} et l'argent disponible seront recalculés.</p>
@@ -587,7 +607,7 @@ function prevenirLivr(id){const o=S.ops.find(x=>x.id===id),c=C(o.contactId),r=re
   const msg=`Bonjour ${c.nom.split(' ')[0]},\nC'est ${S.boutique}. Votre commande (${o.lignes.map(l=>`${l.qte} × ${l.nom}`).join(', ')}) sera livrée ${livrQuand(o.livraison_prevue)}${o.livraison_note?` (${o.livraison_note})`:''}.${r?`\nReste à payer à la livraison : ${fmt(r).replace(/ F$/,' FCFA')}.`:''}\nMerci !`;
   waSheet('Prévenir '+esc(c.nom),c.tel,msg)}
 function opAddPay(id){const o=S.ops.find(x=>x.id===id);const m=Math.min(num($('#oppay').value),reste(o));if(!m){toast('Indiquez un montant');return}
-  const pay={id:uid(),date:new Date().toISOString(),montant:m,mode:segVal('opmode')||'Espèces'};o.paiements.push(pay);touch('paiements',pay.id);commit();render();opSheet(id);toast('Versement enregistré')}
+  const pay={id:uid(),date:dateISO(dateVal('oppdate')),montant:m,mode:segVal('opmode')||'Espèces'};o.paiements.push(pay);touch('paiements',pay.id);commit();render();opSheet(id);toast('Versement enregistré')}
 
 /* ---------- Contacts ---------- */
 function vContacts(){const all=S.contacts.filter(c=>c.type===ctab);const tot=all.reduce((s,c)=>s+balance(c.id),0);
@@ -636,8 +656,9 @@ function paySheet(cid){const c=C(cid);const b=balance(cid);const isC=c.type==='c
   <p class="sub" style="margin:-8px 0 14px">${esc(c.nom)} · ${isC?'doit':'à payer'} <b class="debt amt">${fmt(b)}</b></p>
   <div class="stack"><label class="field" for="pmt">Montant ${isC?'reçu':'payé'}<input id="pmt" inputmode="numeric" value="${b}"></label>
   ${modeSeg('pmode')}<p class="sub" style="margin:0">Le paiement règle d'abord les plus anciennes dettes.</p>
+  ${dateField('pdate')}
   <button class="btn primary" onclick="savePay('${cid}')">Enregistrer</button></div>`)}
-function savePay(cid){let m=Math.min(num($('#pmt').value),balance(cid));if(!m){toast('Indiquez un montant');return}const mode=segVal('pmode')||'Espèces';const now=new Date().toISOString();
+function savePay(cid){let m=Math.min(num($('#pmt').value),balance(cid));if(!m){toast('Indiquez un montant');return}const mode=segVal('pmode')||'Espèces';const now=dateISO(dateVal('pdate'));
   opsOf(cid).filter(o=>reste(o)>0).reverse().forEach(o=>{if(!m)return;const x=Math.min(m,reste(o));const pay={id:uid(),date:now,montant:x,mode};o.paiements.push(pay);touch('paiements',pay.id);m-=x});
   commit();closeSheet();render();toast('Paiement enregistré')}
 
@@ -678,6 +699,7 @@ function depHtml(){const c=dep.contactId&&C(dep.contactId);const r=dep.montant-d
   ${dep.paye===0?'':`<div class="field">Payé avec${modeSeg('depmode',dep.mode)}</div>`}
   <div id="dreste" class="restebox ${r>0?'is-debt':''}">${depReste()}</div>
   ${dep.err?`<p class="err">${dep.err}</p>`:''}
+  ${dateField('ddate',dep.odate,'dep.odate=this.value','Date de la dépense')}
   <button class="btn primary" onclick="depSave()">Enregistrer la dépense</button></div>`}
 function depRender(){const sh=$('#sheet'),st=sh.scrollTop;sheetSet(depHtml());sh.scrollTop=st}
 function depCat(k){dep.cat=k;document.querySelectorAll('.catgrid button').forEach(b=>b.classList.toggle('on',b.dataset.cat===k))}
@@ -694,7 +716,7 @@ function depSave(){const p=depPaid();
   if(!dep.cat){dep.err='Choisissez pour quoi est la dépense.';depRender();return}
   if(!dep.montant){dep.err='Indiquez le montant.';depRender();return}
   if(p<dep.montant&&!dep.contactId){dep.err="Une dépense à payer plus tard a besoin d'un fournisseur. Touchez « Fournisseur » pour le choisir.";depRender();return}
-  const now=new Date().toISOString();
+  const now=dateISO(dep.odate);
   const op={id:uid(),type:'depense',contactId:dep.contactId,date:now,lignes:[{cat:dep.cat,nom:catLabel(dep.cat),note:dep.note.trim(),qte:1,prix:dep.montant}],total:dep.montant,
     paiements:p>0?[{id:uid(),date:now,montant:p,mode:dep.mode}]:[]};
   S.ops.push(op);touch('ops',op.id);op.paiements.forEach(x=>touch('paiements',x.id));commit();dep=null;closeSheet();render();toast('Dépense enregistrée')}
@@ -752,6 +774,7 @@ function mvSheet(type){const tr=type==='transfert';
   ${tr?`<div class="field">De${modeSeg('mvde','Espèces')}</div><div class="field">Vers${modeSeg('mvvers','Wave')}</div>`:`<div class="field">${type==='retrait'?'Pris dans':'Mis dans'}${modeSeg('mvmode','Espèces')}</div>
   <label class="field" for="mvnote">Note (facultatif)<input id="mvnote" placeholder="${type==='retrait'?'Ex. Courses de la maison':'Ex. Tontine'}"></label>`}
   <p id="mverr" class="err" hidden></p>
+  ${dateField('mvdate')}
   <button class="btn primary" onclick="mvSave('${type}')">Enregistrer</button></div>`)}
 let mvForce='';
 function mvSave(type){const m=num($('#mvmt').value),e=$('#mverr');if(!m){e.textContent='Indiquez le montant.';e.hidden=false;return}
@@ -759,7 +782,7 @@ function mvSave(type){const m=num($('#mvmt').value),e=$('#mverr');if(!m){e.textC
   if((type==='retrait'||type==='transfert')&&tresoStarted()&&m>dispo&&mvForce!==key){mvForce=key;
     e.textContent=`Attention : il n'y a que ${fmt(Math.max(0,dispo))} ${src==='Espèces'?'dans la caisse':'sur '+src}. Touchez encore « Enregistrer » pour confirmer.`;e.hidden=false;return}
   mvForce='';
-  const x={id:uid(),date:new Date().toISOString(),type,montant:m};
+  const x={id:uid(),date:dateISO(dateVal('mvdate')),type,montant:m};
   if(type==='transfert'){x.mode=segVal('mvde');x.vers=segVal('mvvers');if(x.mode===x.vers){e.textContent='Choisissez deux comptes différents.';e.hidden=false;return}}
   else{x.mode=segVal('mvmode');const n=$('#mvnote').value.trim();if(n)x.note=n}
   S.mvts.push(x);touch('mvts',x.id);commit();closeSheet();render();toast('Mouvement enregistré')}
