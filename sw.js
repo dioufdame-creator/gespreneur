@@ -1,10 +1,12 @@
 // Gespreneur — fonctionnement hors connexion.
 // Changez VERSION à chaque mise à jour de l'application pour que les téléphones reçoivent la nouvelle version.
-const VERSION = 'gp-v1';
+const VERSION = 'gp-v2';
 const APP = [
   './',
   './index.html',
   './manifest.webmanifest',
+  './supabase.js',
+  './config.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',
@@ -46,6 +48,15 @@ self.addEventListener('fetch', e => {
     e.respondWith(
       fetch(req).then(r => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); } return r; })
         .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // Configuration : réseau d'abord, pour prendre en compte un changement de serveur.
+  if (url.pathname.endsWith('/config.js')) {
+    e.respondWith(
+      fetch(req).then(r => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put(req, copy)); } return r; })
+        .catch(() => caches.match(req))
     );
     return;
   }

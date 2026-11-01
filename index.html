@@ -185,6 +185,16 @@ nav.tabs button.on .ic{stroke-width:2.4}
 .switch[aria-checked="true"]{background:var(--accent)}
 .switch[aria-checked="true"] span{left:27px}
 
+.auth{padding-block:32px 40px}
+.auth-head{display:flex;flex-direction:column;gap:8px;margin-bottom:24px}
+.auth-head h1{margin:6px 0 0;font-size:32px}
+.mark.xl{width:64px;height:64px;font-size:32px;border-radius:18px}
+.status{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);min-height:20px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.status.ok .dot{background:var(--accent)}
+.status.warn{color:var(--debt)}
+.status.warn .dot{background:var(--debt)}
+.btn:disabled{opacity:.6}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(150px + env(safe-area-inset-bottom,0px));z-index:30;background:var(--fg);color:var(--bg);padding:12px 18px;border-radius:12px;font-weight:700;max-width:calc(100% - 32px);text-align:center}
 </style>
 <style>
@@ -199,7 +209,7 @@ img{max-width:100%}
 <body>
 <div class="app">
   <header class="top">
-    <div class="brand"><span class="mark">G</span><div style="min-width:0"><div class="bname" id="bname"></div><div class="sub small">Gespreneur</div></div></div>
+    <div class="brand"><span class="mark">G</span><div style="min-width:0"><div class="bname" id="bname"></div><div class="sub small" id="hsub">Gespreneur</div></div></div>
     <button class="iconbtn" onclick="settings()" aria-label="Réglages" id="gearbtn"></button>
   </header>
   <main id="view"></main>
@@ -213,6 +223,8 @@ img{max-width:100%}
 <div class="sheet" id="sheet" hidden role="dialog" aria-modal="true"><div class="inner"></div></div>
 <div class="toast" id="toast" hidden role="status"></div>
 
+<script src="supabase.js"></script>
+<script src="config.js"></script>
 <script>
 /* ---------- Outils ---------- */
 const $=s=>document.querySelector(s);
@@ -259,6 +271,18 @@ const opsOf=id=>S.ops.filter(o=>o.contactId===id).sort((a,b)=>b.date.localeCompa
 const balance=id=>opsOf(id).reduce((s,o)=>s+reste(o),0);
 const oldestDue=id=>{const u=opsOf(id).filter(o=>reste(o)>0);return u.length?u[u.length-1]:null};
 const prixDe=(a,type)=>type==='vente'?a.pv:a.pa;
+const TABLES=['articles','contacts','ops','paiements'];
+const blank=()=>({articles:{},contacts:{},ops:{},paiements:{}});
+// Stock affiché = stock de départ (base) + achats − ventes : pas de conflit entre téléphones.
+function movement(aid){return S.ops.reduce((s,o)=>s+o.lignes.reduce((t,l)=>l.aid===aid?t+(o.type==='achat'?l.qte:-l.qte):t,0),0)}
+function recomputeStock(){S.articles.forEach(a=>a.stock=(a.base||0)+movement(a.id))}
+// Marque un élément à envoyer au serveur (compte uniquement)
+function touch(t,id){if(S.mode!=='compte')return;S.dirty[t][id]=(S.dirty[t][id]||0)+1;delete S.tomb[t][id]}
+function bury(t,id){if(S.mode!=='compte')return;delete S.dirty[t][id];S.tomb[t][id]=1}
+function commit(){recomputeStock();save();scheduleSync()}
+const pending=()=>S&&S.mode==='compte'?TABLES.reduce((n,t)=>n+Object.keys(S.dirty[t]).length+Object.keys(S.tomb[t]).length,0)+(S.dirtyProfil?1:0):0;
+function emptyAccount(u,boutique){return {mode:'compte',user:{id:u.id,tel:(u.user_metadata&&u.user_metadata.telephone)||''},boutique:boutique||'Ma boutique',auto:{on:false,jours:7},
+  articles:[],contacts:[],ops:[],dirty:blank(),tomb:blank(),dirtyProfil:false,lastPull:null}}
 
 function seed(){
   let k=0;const dAgo=n=>{const d=new Date();d.setDate(d.getDate()-n);d.setHours(9,0,0,0);d.setMinutes(30*(k++));return d.toISOString()};
@@ -275,7 +299,7 @@ function seed(){
   const mk=(type,ci,ago,items,pays)=>{const date=dAgo(ago);
     const lignes=items.map(([ai,q])=>{const a=arts[ai];return{aid:a.id,nom:a.nom,qte:q,prix:prixDe(a,type)}});
     ops.push({id:uid(),type,contactId:ci==null?null:cons[ci].id,date,lignes,total:lignes.reduce((s,l)=>s+l.qte*l.prix,0),
-      paiements:pays.map(([m,mode,ag])=>({date:ag==null?date:dAgo(ag),montant:m,mode}))})};
+      paiements:pays.map(([m,mode,ag])=>({id:uid(),date:ag==null?date:dAgo(ag),montant:m,mode}))})};
   mk('vente',2,20,[[3,2],[7,4]],[[2000,'Espèces'],[1000,'Wave',10]]);
   mk('vente',0,12,[[0,1],[1,1]],[[10000,'Espèces']]);
   mk('achat',4,9,[[0,5]],[[50000,'Espèces']]);
@@ -284,14 +308,19 @@ function seed(){
   mk('vente',3,0,[[5,4],[2,2]],[[2600,'Espèces']]);
   mk('vente',null,0,[[2,3],[5,2]],[[2700,'Espèces']]);
   mk('vente',0,0,[[7,2]],[[1000,'Espèces']]);
-  return {boutique:'Boutique Diallo',auto:{on:false,jours:7},articles:arts,contacts:cons,ops,exemple:true};
+  const st={mode:'demo',boutique:'Boutique Diallo',auto:{on:false,jours:7},articles:arts,contacts:cons,ops};
+  arts.forEach(a=>{a.base=a.stock-ops.reduce((s,o)=>s+o.lignes.reduce((t,l)=>l.aid===a.id?t+(o.type==='achat'?l.qte:-l.qte):t,0),0)});
+  return st;
 }
 
 /* ---------- Navigation ---------- */
 const TABS=[['home','Accueil',I.home],['vente','Vendre',I.cart],['achat','Acheter',I.box],['contacts','Contacts',I.users],['articles','Articles',I.tag]];
 function go(v,p){view=v;param=p??null;render();window.scrollTo(0,0)}
 function render(){
-  $('#bname').textContent=S.boutique;
+  const auth=!S;
+  $('header.top').hidden=auth;$('nav.tabs').hidden=auth;
+  if(auth){$('#bname').textContent='Gespreneur';$('#hsub').textContent='';$('#view').innerHTML=vAuth();$('#cartbar').hidden=true;return}
+  $('#bname').textContent=S.boutique;renderStatus();
   const V={home:vHome,vente:vSale,achat:vSale,contacts:vContacts,contact:vContact,articles:vArticles}[view];
   $('#view').innerHTML=V();
   const cur=view==='contact'?'contacts':view;
@@ -330,7 +359,7 @@ function vHome(){
   const low=S.articles.filter(a=>a.stock<=a.seuil);
   const recent=[...S.ops].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
   return `${showInstallBanner()?`<div class="banner install"><span><b>Installez l'application</b> sur votre téléphone pour l'ouvrir comme WhatsApp, même sans internet.</span><span class="bactions"><button onclick="installApp()">Installer</button><button onclick="hideInstall()" aria-label="Plus tard">Plus tard</button></span></div>`:''}
-  ${S.exemple?`<div class="banner"><span>Données d'exemple, enregistrées sur ce téléphone.</span><button onclick="settings()">Changer</button></div>`:''}
+  ${S.mode==='demo'?`<div class="banner"><span>Démonstration avec des données d'exemple.</span><button onclick="exitDemo('signup')">Créer mon compte</button></div>`:''}
   <div class="big-actions">
     <button class="big primary" onclick="go('vente')">${I.cart}<span>Vendre</span></button>
     <button class="big" onclick="go('achat')">${I.box}<span>Acheter</span></button>
@@ -416,8 +445,8 @@ function coSave(){const isV=cart.type==='vente';const tot=cartTotal();const p=Ma
   const now=new Date().toISOString();
   const lignes=Object.entries(cart.lines).map(([id,q])=>{const a=A(id);return{aid:id,nom:a.nom,qte:q,prix:prixDe(a,cart.type)}});
   const op={id:uid(),type:cart.type,contactId:cart.contactId,date:now,lignes,total:tot,paiements:p>0?[{date:now,montant:p,mode:co.mode}]:[]};
-  lignes.forEach(l=>{const a=A(l.aid);a.stock+=isV?-l.qte:l.qte});
-  S.ops.push(op);save();cart={type:null,lines:{},contactId:null,q:''};co=null;closeSheet();go('home');
+  op.paiements.forEach(x=>x.id=uid());
+  S.ops.push(op);touch('ops',op.id);op.paiements.forEach(x=>touch('paiements',x.id));commit();cart={type:null,lines:{},contactId:null,q:''};co=null;closeSheet();go('home');
   toast(isV?'Vente enregistrée':'Achat enregistré');setTimeout(()=>opSheet(op.id),300)}
 
 /* ---------- Détail d'une opération ---------- */
@@ -432,7 +461,7 @@ function opSheet(id){const o=S.ops.find(x=>x.id===id);if(!o)return;const c=o.con
     <button class="btn primary" onclick="opAddPay('${o.id}')">Enregistrer le versement</button></div>`:''}
   ${isV&&c?`<div style="margin-top:12px"><button class="btn" onclick="recuSheet('${o.id}')">${I.msg}Envoyer le reçu sur WhatsApp</button></div>`:''}`)}
 function opAddPay(id){const o=S.ops.find(x=>x.id===id);const m=Math.min(num($('#oppay').value),reste(o));if(!m){toast('Indiquez un montant');return}
-  o.paiements.push({date:new Date().toISOString(),montant:m,mode:segVal('opmode')||'Espèces'});save();render();opSheet(id);toast('Versement enregistré')}
+  const pay={id:uid(),date:new Date().toISOString(),montant:m,mode:segVal('opmode')||'Espèces'};o.paiements.push(pay);touch('paiements',pay.id);commit();render();opSheet(id);toast('Versement enregistré')}
 
 /* ---------- Contacts ---------- */
 function vContacts(){const all=S.contacts.filter(c=>c.type===ctab);const tot=all.reduce((s,c)=>s+balance(c.id),0);
@@ -469,11 +498,11 @@ function contactForm(id,type,ret){const c=id?C(id):{nom:'',tel:'+221 '};const is
   setTimeout(()=>{if(!id)$('#cnom')?.focus()},250)}
 function saveContact(id,type,ret){const nom=$('#cnom').value.trim(),tel=$('#ctel').value.trim();
   if(!nom){const e=$('#cerr');e.textContent='Écrivez le nom.';e.hidden=false;return}
-  let c;if(id){c=C(id);c.nom=nom;c.tel=tel}else{c={id:uid(),type,nom,tel,relance:null};S.contacts.push(c)}save();
+  let c;if(id){c=C(id);c.nom=nom;c.tel=tel}else{c={id:uid(),type,nom,tel,relance:null};S.contacts.push(c)}touch('contacts',c.id);commit();
   if(ret==='co'){cart.contactId=c.id;co.err='';render();sheetSet(coHtml());return}
   if(ret==='pick'){cart.contactId=c.id;closeSheet();render();return}
   closeSheet();ctab=type;go('contact',c.id);toast('Contact enregistré')}
-function delContact(id){S.contacts=S.contacts.filter(c=>c.id!==id);save();closeSheet();go('contacts');toast('Contact supprimé')}
+function delContact(id){S.contacts=S.contacts.filter(c=>c.id!==id);bury('contacts',id);commit();closeSheet();go('contacts');toast('Contact supprimé')}
 
 function paySheet(cid){const c=C(cid);const b=balance(cid);const isC=c.type==='client';
   openSheet(`<h3>${isC?'Encaisser un paiement':'Payer le fournisseur'}</h3>
@@ -482,8 +511,8 @@ function paySheet(cid){const c=C(cid);const b=balance(cid);const isC=c.type==='c
   ${modeSeg('pmode')}<p class="sub" style="margin:0">Le paiement règle d'abord les plus anciennes dettes.</p>
   <button class="btn primary" onclick="savePay('${cid}')">Enregistrer</button></div>`)}
 function savePay(cid){let m=Math.min(num($('#pmt').value),balance(cid));if(!m){toast('Indiquez un montant');return}const mode=segVal('pmode')||'Espèces';const now=new Date().toISOString();
-  opsOf(cid).filter(o=>reste(o)>0).reverse().forEach(o=>{if(!m)return;const x=Math.min(m,reste(o));o.paiements.push({date:now,montant:x,mode});m-=x});
-  save();closeSheet();render();toast('Paiement enregistré')}
+  opsOf(cid).filter(o=>reste(o)>0).reverse().forEach(o=>{if(!m)return;const x=Math.min(m,reste(o));const pay={id:uid(),date:now,montant:x,mode};o.paiements.push(pay);touch('paiements',pay.id);m-=x});
+  commit();closeSheet();render();toast('Paiement enregistré')}
 
 /* ---------- WhatsApp ---------- */
 function waNum(tel){let d=String(tel||'').replace(/\D/g,'');if(d.startsWith('00'))d=d.slice(2);if(d.length===9)d='221'+d;return d}
@@ -500,7 +529,7 @@ function relanceMsg(c){const b=balance(c.id);const od=oldestDue(c.id);
 function relanceSheet(cid){const c=C(cid);
   waSheet('Relancer '+esc(c.nom),c.tel,relanceMsg(c),`markRel('${cid}')`,
   `<p class="note">${S.auto.on?`Relance automatique activée : dans la version finale, ce message partira tout seul tous les ${S.auto.jours} jours.`:'Dans la version finale, ce message pourra partir tout seul (voir Réglages).'}</p>`)}
-function markRel(cid){const c=C(cid);c.relance=new Date().toISOString();save();setTimeout(render,400)}
+function markRel(cid){const c=C(cid);c.relance=new Date().toISOString();touch('contacts',cid);commit();setTimeout(render,400)}
 function recuSheet(oid){const o=S.ops.find(x=>x.id===oid);const c=C(o.contactId);const r=reste(o);
   const msg=`${S.boutique} · Reçu du ${flong(o.date)}\n\n${o.lignes.map(l=>`${l.qte} × ${l.nom} : ${fmt(l.prix*l.qte)}`).join('\n')}\n\nTotal : ${fmt(o.total)}\nPayé : ${fmt(paid(o))}\nReste : ${fmt(r)}\n\nMerci ${c.nom.split(' ')[0]} !`;
   waSheet('Envoyer le reçu',c.tel,msg)}
@@ -532,10 +561,10 @@ function pickPhoto(inp){const f=inp.files&&inp.files[0];if(!f)return;const r=new
     tmpPhoto=c.toDataURL('image/jpeg',.8);$('#fprev').innerHTML=`<img src="${tmpPhoto}" alt="">`};img.src=r.result};r.readAsDataURL(f)}
 function saveArticle(id){const nom=$('#fnom').value.trim();const pv=num($('#fpv').value),pa=num($('#fpa').value),stock=num($('#fstock').value),seuil=num($('#fseuil').value);
   const e=$('#ferr');if(!nom){e.textContent="Écrivez le nom de l'article.";e.hidden=false;return}if(!pv){e.textContent='Indiquez le prix de vente.';e.hidden=false;return}
-  if(id)Object.assign(A(id),{nom,pv,pa,stock,seuil,photo:tmpPhoto});else S.articles.push({id:uid(),nom,pv,pa,stock,seuil,photo:tmpPhoto});
-  save();closeSheet();render();toast('Article enregistré')}
+  let a;if(id){a=A(id);Object.assign(a,{nom,pv,pa,seuil,photo:tmpPhoto,base:stock-movement(id)})}else{a={id:uid(),nom,pv,pa,base:stock,stock,seuil,photo:tmpPhoto};S.articles.push(a)}
+  touch('articles',a.id);commit();closeSheet();render();toast('Article enregistré')}
 function askDelArt(id){$('#delzone').innerHTML=`<p style="margin:0 0 10px"><b>Supprimer cet article ?</b> Les anciennes ventes restent dans l'historique.</p><div class="row2"><button class="btn" onclick="articleForm('${id}')">Annuler</button><button class="btn danger" onclick="delArt('${id}')">Oui, supprimer</button></div>`}
-function delArt(id){S.articles=S.articles.filter(a=>a.id!==id);delete cart.lines[id];save();closeSheet();render();toast('Article supprimé')}
+function delArt(id){S.articles=S.articles.filter(a=>a.id!==id);delete cart.lines[id];bury('articles',id);commit();closeSheet();render();toast('Article supprimé')}
 function shareCatalogue(){const list=S.articles.filter(a=>a.stock>0);
   const msg=`*${S.boutique}* · nos prix du jour\n\n${list.map(a=>`• ${a.nom} : ${fmt(a.pv)}`).join('\n')}\n\nCommandez directement sur WhatsApp !`;
   waSheet('Partager le catalogue','',msg,'',`<p class="note">WhatsApp vous laissera choisir à qui l'envoyer (un client, un groupe ou votre statut).</p>`)}
@@ -551,16 +580,23 @@ function settings(){const a=S.auto;
     <p class="note">Dans ce prototype, la relance s'envoie en un clic. L'envoi tout seul viendra avec WhatsApp Business.</p></div>
   <button class="btn primary" onclick="saveSettings()">Enregistrer</button>
   ${installHtml()}
-  <h4 style="margin-bottom:0">Données</h4><p class="sub" style="margin:0">Tout est enregistré sur ce téléphone uniquement. Faites une sauvegarde de temps en temps et gardez le fichier (WhatsApp à vous-même, Google Drive…).</p>
+  ${S.mode==='compte'?`<h4 style="margin-bottom:0">Compte</h4>
+  <div class="card pad"><div class="sub">Numéro</div><b class="amt">${esc(fmtTel(S.user.tel))}</b><div class="sub" style="margin-top:8px">${statusText()}</div></div>
+  <button class="btn" onclick="syncNow()">Synchroniser maintenant</button>
+  <div id="logoutzone" class="stack"><button class="btn danger" onclick="logout()">Se déconnecter</button></div>`
+  :`<h4 style="margin-bottom:0">Démonstration</h4><p class="sub" style="margin:0">Ces données sont un exemple. Elles ne sont pas enregistrées en ligne.</p>
+  <button class="btn primary" onclick="exitDemo('signup')">Créer mon compte</button><button class="btn" onclick="exitDemo('login')">J'ai déjà un compte</button>`}
+  <h4 style="margin-bottom:0">Copie dans un fichier</h4><p class="sub" style="margin:0">${S.mode==='compte'?'Vos données sont enregistrées en ligne. Vous pouvez aussi en garder une copie.':"Gardez une copie, ou rechargez une ancienne sauvegarde."}</p>
   <div class="row2"><button class="btn" onclick="exportData()">Sauvegarder</button><label class="btn" for="fimport" style="cursor:pointer">Restaurer</label></div>
   <input id="fimport" type="file" accept="application/json,.json" hidden onchange="importData(this)">
   <p id="imperr" class="err" hidden></p>
-  <div id="datazone" class="stack"><button class="btn" onclick="resetData('demo')">Remettre les données d'exemple</button><button class="btn danger" onclick="resetData('vide')">Tout effacer et commencer</button></div></div>`)}
-function saveSettings(){S.boutique=$('#sbout').value.trim()||'Ma boutique';S.auto={on:$('#sauto').getAttribute('aria-checked')==='true',jours:num(segVal('jours'))||7};save();closeSheet();render();toast('Réglages enregistrés')}
-function resetData(k,ok){if(!ok){$('#datazone').innerHTML=`<p style="margin:0"><b>${k==='vide'?'Effacer tous les clients, articles et opérations ?':"Remplacer vos données par l'exemple ?"}</b></p>
-  <div class="row2"><button class="btn" onclick="settings()">Annuler</button><button class="btn danger" onclick="resetData('${k}',1)">Oui, confirmer</button></div>`;return}
-  S=k==='vide'?{boutique:S.boutique,auto:S.auto,articles:[],contacts:[],ops:[],exemple:false}:seed();
-  cart={type:null,lines:{},contactId:null,q:''};save();closeSheet();go('home');toast(k==='vide'?'Tout est effacé':'Exemple rechargé')}
+  ${S.mode==='compte'?`<div id="datazone" class="stack"><button class="btn danger" onclick="resetData('vide')">Tout effacer</button></div>`:''}</div>`)}
+function saveSettings(){S.boutique=$('#sbout').value.trim()||'Ma boutique';S.auto={on:$('#sauto').getAttribute('aria-checked')==='true',jours:num(segVal('jours'))||7};if(S.mode==='compte')S.dirtyProfil=true;commit();closeSheet();render();toast('Réglages enregistrés')}
+function buryAll(){S.articles.forEach(x=>bury('articles',x.id));S.contacts.forEach(x=>bury('contacts',x.id));S.ops.forEach(o=>{bury('ops',o.id);o.paiements.forEach(p=>bury('paiements',p.id))})}
+function resetData(k,ok){if(!ok){$('#datazone').innerHTML=`<p style="margin:0"><b>Effacer tous les clients, articles et opérations, sur ce téléphone et en ligne ?</b></p>
+  <div class="row2"><button class="btn" onclick="settings()">Annuler</button><button class="btn danger" onclick="resetData('${k}',1)">Oui, tout effacer</button></div>`;return}
+  buryAll();S.articles=[];S.contacts=[];S.ops=[];
+  cart={type:null,lines:{},contactId:null,q:''};commit();closeSheet();go('home');toast('Tout est effacé')}
 
 /* ---------- Installation (PWA) ---------- */
 let installEvt=null;
@@ -582,7 +618,8 @@ window.addEventListener('appinstalled',()=>{installEvt=null;toast('Application i
 /* ---------- Sauvegarde ---------- */
 function exportData(){
   const d=new Date().toISOString().slice(0,10);
-  const blob=new Blob([JSON.stringify({app:'gespreneur',version:1,date:new Date().toISOString(),data:S})],{type:'application/json'});
+  const {boutique,auto,articles,contacts,ops}=S;
+  const blob=new Blob([JSON.stringify({app:'gespreneur',version:2,date:new Date().toISOString(),data:{boutique,auto,articles,contacts,ops}})],{type:'application/json'});
   const name=`gespreneur-${S.boutique.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'boutique'}-${d}.json`;
   const file=new File([blob],name,{type:'application/json'});
   if(navigator.canShare&&navigator.canShare({files:[file]})){navigator.share({files:[file],title:'Sauvegarde Gespreneur'}).then(()=>toast('Sauvegarde partagée')).catch(()=>{});return}
@@ -590,16 +627,165 @@ function exportData(){
 function importData(inp){const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
   r.onload=()=>{const err=$('#imperr');try{const j=JSON.parse(r.result);const d=j.data||j;
       if(!Array.isArray(d.articles)||!Array.isArray(d.contacts)||!Array.isArray(d.ops))throw 0;
-      S=Object.assign({boutique:'Ma boutique',auto:{on:false,jours:7},exemple:false},d);cart={type:null,lines:{},contactId:null,q:''};
-      save();closeSheet();go('home');toast('Données restaurées')}
+      normalizeData(d);
+      if(S.mode==='compte'){buryAll();S.articles=d.articles;S.contacts=d.contacts;S.ops=d.ops;S.boutique=d.boutique||S.boutique;S.dirtyProfil=true;touchAll()}
+      else S=Object.assign({mode:'demo',boutique:'Ma boutique',auto:{on:false,jours:7}},{boutique:d.boutique,auto:d.auto||{on:false,jours:7},articles:d.articles,contacts:d.contacts,ops:d.ops});
+      cart={type:null,lines:{},contactId:null,q:''};commit();closeSheet();go('home');toast('Données restaurées')}
     catch(e){err.textContent="Ce fichier n'est pas une sauvegarde Gespreneur.";err.hidden=false}};
   r.readAsText(f)}
 
+/* ---------- Compte ---------- */
+let sb=null, authTab='login', legacy=null;
+const LEGACY_KEY='gespreneur-ancien';
+function initSb(){const c=window.GESPRENEUR_CONFIG;if(!window.supabase||!c||!c.url||/VOTRE/.test(c.url))return null;
+  try{return supabase.createClient(c.url,c.anonKey,{auth:{persistSession:true,autoRefreshToken:true,storageKey:'gespreneur-auth'}})}catch(e){return null}}
+const telEmail=t=>waNum(t)+'@tel.gespreneur.app';
+function fmtTel(t){const d=waNum(t);return d.startsWith('221')&&d.length===12?`+221 ${d.slice(3,5)} ${d.slice(5,8)} ${d.slice(8,10)} ${d.slice(10)}`:(d?'+'+d:'')}
+function normalizeData(d){d.articles=d.articles||[];d.contacts=d.contacts||[];d.ops=d.ops||[];
+  d.ops.forEach(o=>{o.paiements=(o.paiements||[]).map(p=>({...p,id:p.id||uid()}))});
+  d.articles.forEach(a=>{if(a.base==null){const m=d.ops.reduce((s,o)=>s+o.lignes.reduce((t,l)=>l.aid===a.id?t+(o.type==='achat'?l.qte:-l.qte):t,0),0);a.base=(a.stock||0)-m}});return d}
+function touchAll(){S.articles.forEach(x=>touch('articles',x.id));S.contacts.forEach(x=>touch('contacts',x.id));S.ops.forEach(o=>{touch('ops',o.id);o.paiements.forEach(p=>touch('paiements',p.id))})}
+
+function vAuth(){
+  if(!sb)return `<div class="auth stack"><div class="auth-head"><span class="mark xl">G</span><h1>Gespreneur</h1></div>
+    <p style="margin:0">L'application n'est pas encore reliée au serveur. Le fichier <b>config.js</b> doit contenir l'adresse et la clé du projet Supabase.</p>
+    <button class="btn" onclick="startDemo()">Voir une démonstration</button></div>`;
+  const up=authTab==='signup';
+  return `<div class="auth"><div class="auth-head"><span class="mark xl">G</span><h1>Gespreneur</h1><p class="sub" style="margin:0">Vos ventes, votre stock et vos clients, simplement.</p></div>
+  <div class="seg" style="margin-bottom:18px"><button class="${up?'':'on'}" onclick="authTab='login';render()">Se connecter</button><button class="${up?'on':''}" onclick="authTab='signup';render()">Créer un compte</button></div>
+  <form class="stack" onsubmit="event.preventDefault();doAuth()">
+    ${up?`<label class="field" for="about">Nom de votre boutique<input id="about" autocomplete="organization" placeholder="Ex. Boutique Ndiaye"></label>`:''}
+    <label class="field" for="atel">Numéro de téléphone<input id="atel" inputmode="tel" autocomplete="tel" placeholder="77 123 45 67"></label>
+    <label class="field" for="apin">${up?'Choisissez un code secret (6 chiffres)':'Code secret (6 chiffres)'}<input id="apin" type="password" inputmode="numeric" maxlength="6" autocomplete="${up?'new-password':'current-password'}"></label>
+    ${up?`<label class="field" for="apin2">Retapez le code<input id="apin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>`:''}
+    <p id="aerr" class="err" hidden></p>
+    <button id="abtn" class="btn primary" type="submit">${up?'Créer mon compte':'Se connecter'}</button>
+  </form>
+  ${legacy?`<p class="note">Les données déjà présentes sur ce téléphone seront ajoutées à votre compte.</p>`:''}
+  <button class="btn" style="margin-top:12px;border-color:transparent;background:transparent" onclick="startDemo()">Voir une démonstration</button></div>`}
+async function doAuth(){const up=authTab==='signup';const err=$('#aerr'),btn=$('#abtn');
+  const show=m=>{err.textContent=m;err.hidden=false;btn.disabled=false;btn.textContent=up?'Créer mon compte':'Se connecter'};
+  const d=waNum($('#atel').value),pin=$('#apin').value.trim();
+  if(d.length<11)return show('Écrivez votre numéro de téléphone.');
+  if(!/^\d{6}$/.test(pin))return show('Le code doit avoir 6 chiffres.');
+  if(up&&pin!==$('#apin2').value.trim())return show('Les deux codes ne sont pas pareils.');
+  if(up&&!$('#about').value.trim())return show('Écrivez le nom de votre boutique.');
+  if(!navigator.onLine)return show('Pas de connexion internet. Réessayez quand le réseau revient.');
+  err.hidden=true;btn.disabled=true;btn.textContent='Un instant…';
+  try{const r=up?await sb.auth.signUp({email:telEmail(d),password:pin,options:{data:{telephone:'+'+d}}})
+                :await sb.auth.signInWithPassword({email:telEmail(d),password:pin});
+    if(r.error)throw r.error;
+    if(!r.data.session)return show("Compte créé, mais la connexion est bloquée : dans Supabase, désactivez « Confirm email ».");
+    startAccount(r.data.session.user,up?$('#about').value.trim():null,'+'+d);
+  }catch(e){const m=String(e.message||e);
+    show(/invalid login/i.test(m)?'Numéro ou code incorrect.':/already|exists/i.test(m)?'Ce numéro a déjà un compte. Touchez « Se connecter ».'
+      :/fetch|network/i.test(m)?'Pas de connexion au serveur. Vérifiez internet.':/rate|too many/i.test(m)?"Trop d'essais. Attendez quelques minutes.":'Erreur : '+m)}}
+function startAccount(u,boutique,tel){
+  S=emptyAccount(u,boutique);S.user.tel=tel||S.user.tel;if(boutique)S.dirtyProfil=true;
+  if(legacy){normalizeData(legacy);S.articles=legacy.articles;S.contacts=legacy.contacts;S.ops=legacy.ops;touchAll();legacy=null;try{localStorage.removeItem(LEGACY_KEY)}catch(e){}}
+  view='home';commit();render();window.scrollTo(0,0);toast(boutique?'Compte créé':'Connecté');sync()}
+function startDemo(){S=seed();recomputeStock();view='home';save();render()}
+function exitDemo(tab){S=null;authTab=tab==='login'?'login':'signup';save();closeSheet();render();window.scrollTo(0,0)}
+async function logout(step){const z=$('#logoutzone');const n=pending();
+  if(!step){z.innerHTML=`<p style="margin:0"><b>${n?`${n} modification${n>1?'s':''} pas encore envoyée${n>1?'s':''}. Elles seront envoyées avant la déconnexion.`:'Se déconnecter de ce téléphone ?'}</b></p>
+    <div class="row2"><button class="btn" onclick="settings()">Annuler</button><button class="btn danger" onclick="logout(1)">Se déconnecter</button></div>`;return}
+  if(step===1&&n){await sync();if(pending()){z.innerHTML=`<p class="err" style="margin:0">Impossible d'envoyer ${pending()} modification(s) (pas d'internet ?). En vous déconnectant maintenant, elles seront perdues.</p>
+    <div class="row2"><button class="btn" onclick="settings()">Annuler</button><button class="btn danger" onclick="logout(2)">Perdre et quitter</button></div>`;return}}
+  try{await sb.auth.signOut()}catch(e){}
+  S=null;authTab='login';save();closeSheet();render();window.scrollTo(0,0)}
+function reloginSheet(){openSheet(`<h3>Reconnexion</h3><p class="sub" style="margin:-8px 0 14px">${esc(fmtTel(S.user.tel))}</p>
+  <form class="stack" onsubmit="event.preventDefault();relogin()"><label class="field" for="rpin">Code secret<input id="rpin" type="password" inputmode="numeric" maxlength="6" autocomplete="current-password"></label>
+  <p id="rerr" class="err" hidden></p><button class="btn primary" type="submit">Se reconnecter</button></form>`)}
+async function relogin(){const e=$('#rerr');
+  try{const r=await sb.auth.signInWithPassword({email:telEmail(S.user.tel),password:$('#rpin').value.trim()});if(r.error)throw r.error;
+    if(r.data.user.id!==S.user.id)throw new Error('autre compte');closeSheet();syncErr='';toast('Reconnecté');sync()}
+  catch(x){e.textContent=/invalid/i.test(x.message)?'Code incorrect.':'Reconnexion impossible : '+x.message;e.hidden=false}}
+
+/* ---------- Synchronisation ---------- */
+// Chaque modification est gardée dans une file d'attente sur le téléphone, puis envoyée dès qu'il y a internet.
+let syncing=false, syncAgain=false, syncTimer=null, lastSync=null, syncErr='';
+const T={articles:'articles',contacts:'contacts',ops:'operations',paiements:'paiements'};
+function findPay(id){for(const o of S.ops)for(const p of o.paiements)if(p.id===id)return [o,p];return null}
+function toRow(t,id){const owner=S.user.id;
+  if(t==='articles'){const a=A(id);return a&&{owner,id,nom:a.nom,pv:a.pv,pa:a.pa,base:a.base||0,seuil:a.seuil,photo:a.photo,deleted:false}}
+  if(t==='contacts'){const c=C(id);return c&&{owner,id,type:c.type,nom:c.nom,tel:c.tel,relance:c.relance,deleted:false}}
+  if(t==='ops'){const o=S.ops.find(x=>x.id===id);return o&&{owner,id,type:o.type,contact_id:o.contactId,date:o.date,lignes:o.lignes,total:o.total,deleted:false}}
+  const f=findPay(id);return f&&{owner,id,op_id:f[0].id,date:f[1].date,montant:f[1].montant,mode:f[1].mode,deleted:false}}
+function applyRow(t,r){
+  const list=t==='articles'?S.articles:t==='contacts'?S.contacts:t==='ops'?S.ops:null;
+  if(list){const i=list.findIndex(x=>x.id===r.id);if(r.deleted){if(i>=0)list.splice(i,1);return}
+    const x=t==='articles'?{id:r.id,nom:r.nom||'',pv:+r.pv||0,pa:+r.pa||0,base:+r.base||0,seuil:+r.seuil||0,photo:r.photo||null,stock:0}
+      :t==='contacts'?{id:r.id,type:r.type,nom:r.nom||'',tel:r.tel||'',relance:r.relance||null}
+      :{id:r.id,type:r.type,contactId:r.contact_id||null,date:r.date,lignes:r.lignes||[],total:+r.total||0,paiements:i>=0?list[i].paiements:[]};
+    if(i>=0)list[i]=x;else list.push(x);return}
+  S.ops.forEach(o=>{const j=o.paiements.findIndex(p=>p.id===r.id);if(j>=0)o.paiements.splice(j,1)});
+  if(r.deleted)return;const o=S.ops.find(x=>x.id===r.op_id);
+  if(o){o.paiements.push({id:r.id,date:r.date,montant:+r.montant||0,mode:r.mode});o.paiements.sort((a,b)=>a.date.localeCompare(b.date))}}
+async function push(){const owner=S.user.id;
+  if(S.dirtyProfil){S.dirtyProfil=false;const r=await sb.from('profils').upsert({owner,telephone:S.user.tel,boutique:S.boutique,auto_on:S.auto.on,auto_jours:S.auto.jours});if(r.error){S.dirtyProfil=true;throw r.error}}
+  for(const t of TABLES){
+    const snap={...S.dirty[t]},ids=Object.keys(snap),rows=ids.map(id=>toRow(t,id)).filter(Boolean);
+    for(let i=0;i<rows.length;i+=200){const r=await sb.from(T[t]).upsert(rows.slice(i,i+200),{onConflict:'owner,id'});if(r.error)throw r.error}
+    ids.forEach(id=>{if(S.dirty[t][id]===snap[id])delete S.dirty[t][id]});
+    const tombs=Object.keys(S.tomb[t]);
+    if(tombs.length){const r=await sb.from(T[t]).upsert(tombs.map(id=>({owner,id,deleted:true})),{onConflict:'owner,id'});if(r.error)throw r.error;tombs.forEach(id=>delete S.tomb[t][id])}
+    save()}}
+async function pull(){
+  const since=S.lastPull?new Date(new Date(S.lastPull).getTime()-120000).toISOString():'1970-01-01T00:00:00Z';
+  const get=async tb=>{let all=[];for(let from=0;;from+=1000){const r=await sb.from(tb).select('*').gt('updated_at',since).order('updated_at').range(from,from+999);
+    if(r.error)throw r.error;all=all.concat(r.data);if(r.data.length<1000)return all}};
+  const data={};for(const t of TABLES)data[t]=await get(T[t]);
+  const pr=await sb.from('profils').select('*').maybeSingle();if(pr.error)throw pr.error;
+  let changed=false,max=S.lastPull;
+  if(pr.data&&!S.dirtyProfil){if(pr.data.boutique&&pr.data.boutique!==S.boutique){S.boutique=pr.data.boutique;changed=true}S.auto={on:!!pr.data.auto_on,jours:pr.data.auto_jours||7}}
+  for(const t of TABLES)for(const r of data[t]){if(!max||new Date(r.updated_at)>new Date(max))max=r.updated_at;
+    if(S.dirty[t][r.id]||S.tomb[t][r.id])continue;applyRow(t,r);changed=true}
+  S.lastPull=max;return changed}
+async function sync(){
+  if(!S||S.mode!=='compte'||!sb)return;
+  if(!navigator.onLine){renderStatus();return}
+  if(syncing){syncAgain=true;return}
+  syncing=true;renderStatus();
+  try{const {data}=await sb.auth.getSession();
+    if(!data.session||data.session.user.id!==S.user.id){syncErr='session';return}
+    await push();const changed=await pull();lastSync=new Date();syncErr='';recomputeStock();save();
+    const typing=document.activeElement&&document.activeElement.closest&&document.activeElement.closest('#view input');
+    if(changed&&$('#sheet').hidden&&!typing)render();
+  }catch(e){syncErr=String(e.message||e);console.warn('Synchronisation :',e)}
+  finally{syncing=false;renderStatus();if(syncAgain){syncAgain=false;setTimeout(sync,400)}}}
+function scheduleSync(){if(!S||S.mode!=='compte')return;renderStatus();clearTimeout(syncTimer);syncTimer=setTimeout(sync,1500)}
+async function syncNow(){if(!navigator.onLine){toast('Pas de connexion internet');return}await sync();toast(syncErr?'Synchronisation impossible':'Données à jour');if(!$('#sheet').hidden)settings()}
+function statusInfo(){if(!S)return ['',''];if(S.mode==='demo')return ['','Démonstration'];const n=pending();
+  if(!sb)return ['warn','Serveur non configuré'];
+  if(!navigator.onLine)return ['warn',n?`Hors ligne · ${n} en attente`:'Hors ligne'];
+  if(syncing)return ['','Synchronisation…'];
+  if(syncErr==='session')return ['warn','Reconnexion nécessaire'];
+  if(syncErr)return ['warn',n?`Erreur · ${n} en attente`:'Erreur de synchronisation'];
+  if(n)return ['',`${n} en attente`];
+  return ['ok',lastSync?'Synchronisé':'Connecté']}
+const statusText=()=>statusInfo()[1];
+function renderStatus(){const el=$('#hsub');if(!el||!S)return;const [c,t]=statusInfo();
+  el.innerHTML=S.mode==='demo'?t:`<button class="status ${c}" onclick="${syncErr==='session'?'reloginSheet()':'syncNow()'}"><span class="dot"></span>${t}</button>`}
+window.addEventListener('online',()=>sync());
+window.addEventListener('offline',renderStatus);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')sync()});
+setInterval(()=>sync(),60000);
+
 /* ---------- Démarrage ---------- */
-$('#gearbtn').innerHTML=I.gear;
-S=load()||seed();save();
-{const h=location.hash.slice(1);if(h==='vente'||h==='achat'){view=h;history.replaceState(null,'',location.pathname)}}
-render();
+async function boot(){
+  $('#gearbtn').innerHTML=I.gear;
+  sb=initSb();
+  let st=load();
+  // Données d'une version sans compte : gardées pour être ajoutées au compte
+  if(st&&!st.mode){if(!st.exemple&&((st.articles||[]).length||(st.contacts||[]).length||(st.ops||[]).length)){try{localStorage.setItem(LEGACY_KEY,JSON.stringify(st))}catch(e){}}st=null}
+  try{legacy=JSON.parse(localStorage.getItem(LEGACY_KEY)||'null')}catch(e){}
+  S=st;
+  if(S){if(!S.dirty&&S.mode==='compte'){S.dirty=blank();S.tomb=blank()}recomputeStock()}
+  {const h=location.hash.slice(1);if(S&&(h==='vente'||h==='achat'))view=h;if(h)history.replaceState(null,'',location.pathname)}
+  render();
+  if(S&&S.mode==='compte')sync();
+}
+boot();
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
 </script>
