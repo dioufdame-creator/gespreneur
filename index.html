@@ -185,6 +185,12 @@ nav.tabs button.on .ic{stroke-width:2.4}
 .switch[aria-checked="true"]{background:var(--accent)}
 .switch[aria-checked="true"] span{left:27px}
 
+.perseg button{font-size:14px;padding:0 4px;line-height:1.15}
+.pnav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 12px}
+.pnav b{font-size:18px;text-align:center;flex:1;min-width:0}
+.pnav button{width:48px;height:48px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface);display:grid;place-items:center;flex:none}
+.pnav button:disabled{opacity:.35;cursor:default}
+.pnav-t{font-weight:700;font-size:16px;margin:0 0 12px}
 .kgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
 .kcard{padding:14px;min-width:0}
 .kcard .amt{display:block;font-size:20px;margin-top:4px}
@@ -767,16 +773,31 @@ function mvDel(id,ok){if(!ok){$('#mvdel').innerHTML=`<p style="margin:0 0 10px">
   S.mvts=S.mvts.filter(x=>x.id!==id);bury('mvts',id);commit();closeSheet();render();toast('Mouvement supprimé')}
 
 /* ---------- Rapports ---------- */
-let rper='7j';
-const PERIODES=[['jour','Jour'],['7j','7 jours'],['mois','Ce mois'],['mpasse','Mois passé']];
-function periode(k){const n=new Date();let s=new Date(n),e=new Date(n);s.setHours(0,0,0,0);e.setHours(23,59,59,999);
-  if(k==='7j')s.setDate(s.getDate()-6);
-  if(k==='mois')s.setDate(1);
-  if(k==='mpasse'){s=new Date(n.getFullYear(),n.getMonth()-1,1);e=new Date(n.getFullYear(),n.getMonth(),0,23,59,59,999)}
-  return [s,e]}
-function avant(k,[s,e]){if(k==='mois'||k==='mpasse'){const p=new Date(s.getFullYear(),s.getMonth()-1,1);
-    const fin=k==='mois'?new Date(p.getFullYear(),p.getMonth(),Math.min(new Date().getDate(),new Date(p.getFullYear(),p.getMonth()+1,0).getDate()),23,59,59,999):new Date(s.getFullYear(),s.getMonth(),0,23,59,59,999);return [p,fin]}
-  const len=e-s+1;return [new Date(s-len),new Date(s-1)]}
+let rper='mois', roff=0;
+const PERIODES=[['jour','Jour'],['mois','Mois'],['annee','Année'],['tout','Depuis le début']];
+const finJour=d=>{const x=new Date(d);x.setHours(23,59,59,999);return x};
+function debutActivite(){let m=Date.now();S.ops.forEach(o=>{const t=Date.parse(o.date);if(t<m)m=t});(S.mvts||[]).forEach(x=>{const t=Date.parse(x.date);if(t<m)m=t});
+  const d=new Date(m);d.setHours(0,0,0,0);return d}
+function periode(k,off=0){const n=new Date();
+  if(k==='jour'){const s=new Date(n);s.setHours(0,0,0,0);s.setDate(s.getDate()+off);return [s,finJour(s)]}
+  if(k==='mois')return [new Date(n.getFullYear(),n.getMonth()+off,1),new Date(n.getFullYear(),n.getMonth()+off+1,0,23,59,59,999)];
+  if(k==='annee')return [new Date(n.getFullYear()+off,0,1),new Date(n.getFullYear()+off,11,31,23,59,59,999)];
+  return [debutActivite(),finJour(n)]}
+// Période de comparaison : la veille, le mois d'avant, l'année d'avant (à date égale pour la période en cours)
+function avant(k,[s,e],off=0){
+  if(k==='jour'){const p=new Date(s);p.setDate(p.getDate()-1);return [p,finJour(p)]}
+  if(k==='mois'){const p=new Date(s.getFullYear(),s.getMonth()-1,1),last=new Date(p.getFullYear(),p.getMonth()+1,0).getDate();
+    return [p,new Date(p.getFullYear(),p.getMonth(),off===0?Math.min(new Date().getDate(),last):last,23,59,59,999)]}
+  if(k==='annee'){const p=new Date(s.getFullYear()-1,0,1),n=new Date();
+    return [p,off===0?new Date(p.getFullYear(),n.getMonth(),n.getDate(),23,59,59,999):new Date(p.getFullYear(),11,31,23,59,59,999)]}
+  return null}
+function titrePeriode(k,[s,e],off){
+  if(k==='jour')return off===0?"Aujourd'hui":off===-1?'Hier':s.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  if(k==='mois'){const t=s.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});return t[0].toUpperCase()+t.slice(1)}
+  if(k==='annee')return String(s.getFullYear());
+  return 'Depuis le '+s.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'})}
+function setPer(k){rper=k;roff=0;render()}
+function navPer(d){roff=Math.min(0,roff+d);render()}
 const coutDe=l=>{if(l.fab)return 0;const a=A(l.aid);if(isFab(a))return 0;return l.cout!=null?l.cout:((a||{}).pa||0)};
 function chiffres([s,e]){const inP=d=>{const t=new Date(d);return t>=s&&t<=e};
   const ventes=S.ops.filter(o=>o.type==='vente'&&inP(o.date)),achats=S.ops.filter(o=>o.type==='achat'&&inP(o.date));
@@ -791,18 +812,22 @@ function chiffres([s,e]){const inP=d=>{const t=new Date(d);return t>=s&&t<=e};
     totalD:depenses.reduce((t,o)=>t+o.total,0),
     retraits:(S.mvts||[]).filter(m=>m.type==='retrait'&&inP(m.date)).reduce((t,m)=>t+m.montant,0)};
   R.benef=R.totalV-R.coutRev-R.totalD;return R}
-function evolution(now,before){if(!before)return now?'<span class="pill">Nouveau</span>':'';const p=Math.round((now-before)/before*100);
-  return `<span class="pill ${p<0?'down':''}">${p>=0?'▲':'▼'} ${Math.abs(p)} %</span> <span class="sub">par rapport à avant</span>`}
-function vRapports(){const P=periode(rper),[s,e]=P,R=chiffres(P),B=chiffres(avant(rper,P));
-  const lbl=d=>d.toLocaleDateString('fr-FR',{day:'numeric',month:'short'});
-  const titre=rper==='jour'?"Aujourd'hui":s.toDateString()===new Date(Math.min(e,Date.now())).toDateString()?`Le ${lbl(s)}`:`Du ${lbl(s)} au ${lbl(e)}`;
-  // Ventes par jour
-  let chart='';if(rper!=='jour'){const jours=[];for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1))jours.push(new Date(d));
-    const val=jours.map(d=>R.ventes.filter(o=>new Date(o.date).toDateString()===d.toDateString()).reduce((t,o)=>t+o.total,0));
-    const max=Math.max(...val,1),step=jours.length>10?5:1;
-    chart=`<h2>Ventes par jour</h2><div class="card pad"><div class="sub">Meilleur jour : <b class="amt" style="color:var(--fg)">${fmt(Math.max(...val))}</b></div>
-      <div class="chart" role="img" aria-label="Ventes par jour">${val.map((v,i)=>`<div class="col" onclick="toast('${lbl(jours[i])} : ${fmt(v)}')" title="${lbl(jours[i])} : ${fmt(v)}"><div class="bar ${v?'':'zero'}" style="height:${v?Math.max(3,v/max*100):2}%"></div></div>`).join('')}</div>
-      <div class="xlabels">${jours.map((d,i)=>`<span>${i%step===0||(i===jours.length-1&&i%step>=3)?(jours.length>8?d.getDate():d.toLocaleDateString('fr-FR',{weekday:'short'}).replace('.','')):''}</span>`).join('')}</div></div>`}
+const COMP={jour:'à la veille',mois:"au mois d'avant",annee:"à l'année d'avant"};
+function evolution(now,before,k){if(before==null)return '';if(!before)return now?'<span class="pill">Nouveau</span>':'';const p=Math.round((now-before)/before*100);
+  return `<span class="pill ${p<0?'down':''}">${p>=0?'▲':'▼'} ${Math.abs(p)} %</span> <span class="sub">par rapport ${COMP[k]}</span>`}
+function vRapports(){const P=periode(rper,roff),[s,e]=P,R=chiffres(P),AV=avant(rper,P,roff),B=AV?chiffres(AV):null;
+  const titre=titrePeriode(rper,P,roff),debut=debutActivite(),auBout=s<=debut;
+  // Graphique : par jour (mois), par mois (année, depuis le début)
+  let chart='';
+  if(rper!=='jour'){const fin=new Date(Math.min(e,finJour(new Date())));const B2=[];
+    if(rper==='mois'){for(let d=new Date(s);d<=fin;d.setDate(d.getDate()+1)){const a=new Date(d);B2.push({s:a,e:finJour(a),court:String(a.getDate()),long:a.toLocaleDateString('fr-FR',{day:'numeric',month:'short'})})}}
+    else{for(let d=new Date(s.getFullYear(),s.getMonth(),1);d<=fin;d=new Date(d.getFullYear(),d.getMonth()+1,1)){const a=new Date(d);
+      B2.push({s:a,e:new Date(a.getFullYear(),a.getMonth()+1,0,23,59,59,999),court:a.toLocaleDateString('fr-FR',{month:'short'}).replace('.',''),long:a.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})})}}
+    const val=B2.map(b=>R.ventes.filter(o=>{const t=new Date(o.date);return t>=b.s&&t<=b.e}).reduce((t,o)=>t+o.total,0));
+    const max=Math.max(...val,1),step=B2.length>16?Math.ceil(B2.length/8):B2.length>10?(rper==='mois'?5:2):1,parJour=rper==='mois';
+    if(B2.length>1)chart=`<h2>Ventes par ${parJour?'jour':'mois'}</h2><div class="card pad"><div class="sub">Meilleur ${parJour?'jour':'mois'} : <b class="amt" style="color:var(--fg)">${fmt(Math.max(...val))}</b></div>
+      <div class="chart" role="img" aria-label="Ventes par ${parJour?'jour':'mois'}">${val.map((v,i)=>`<div class="col" onclick="toast('${B2[i].long} : ${fmt(v)}')" title="${B2[i].long} : ${fmt(v)}"><div class="bar ${v?'':'zero'}" style="height:${v?Math.max(3,v/max*100):2}%"></div></div>`).join('')}</div>
+      <div class="xlabels">${B2.map((b,i)=>`<span>${i%step===0?b.court:''}</span>`).join('')}</div></div>`}
   // Dépenses par catégorie
   const dc={};R.depenses.forEach(o=>o.lignes.forEach(l=>{const k=l.cat||'autre';dc[k]=(dc[k]||0)+l.prix*l.qte}));
   const depCats=Object.entries(dc).sort((a,b)=>b[1]-a[1]);
@@ -817,10 +842,11 @@ function vRapports(){const P=periode(rper),[s,e]=P,R=chiffres(P),B=chiffres(avan
   const topC=Object.entries(cl).map(([id,m])=>({c:C(id),m})).filter(x=>x.c).sort((a,b)=>b.m-a.m).slice(0,5);
   return `<button class="back" onclick="go('home')">${I.back}Accueil</button>
   <h1>Rapports</h1>
-  <div class="seg" style="margin-bottom:8px">${PERIODES.map(([k,l])=>`<button class="${rper===k?'on':''}" onclick="rper='${k}';render()">${l}</button>`).join('')}</div>
-  <p class="sub" style="margin:0 0 12px">${titre}</p>
+  <div class="seg perseg" style="margin-bottom:10px">${PERIODES.map(([k,l])=>`<button class="${rper===k?'on':''}" onclick="setPer('${k}')">${l}</button>`).join('')}</div>
+  ${rper==='tout'?`<p class="pnav-t">${titre}</p>`:`<div class="pnav"><button aria-label="Période précédente" onclick="navPer(-1)" ${auBout?'disabled':''}>${I.back}</button><b>${titre}</b><button aria-label="Période suivante" onclick="navPer(1)" ${roff>=0?'disabled':''}>${I.chev}</button></div>`}
   <div class="card kmain"><div class="sub">Total des ventes</div><span class="amt">${fmt(R.totalV)}</span>
-    <div>${evolution(R.totalV,B.totalV)}</div><div class="sub" style="margin-top:6px">${R.ventes.length} vente${R.ventes.length>1?'s':''}</div></div>
+    <div>${B?evolution(R.totalV,B.totalV,rper):''}</div><div class="sub" style="margin-top:6px">${R.ventes.length} vente${R.ventes.length>1?'s':''}</div></div>
+  ${rper==='tout'?situationHtml():''}
   <h2>Bénéfice</h2>
   <div class="card pad"><div class="sums">
     <div><span>Ventes</span><b class="amt">${fmt(R.totalV)}</b></div>
@@ -840,11 +866,20 @@ function vRapports(){const P=periode(rper),[s,e]=P,R=chiffres(P),B=chiffres(avan
   <h2>Articles les plus vendus</h2><div class="list card">${topA.map((a,i)=>`<div class="row"><span class="rank">${i+1}</span><div class="main"><div class="title">${esc(a.nom)}</div><div class="sub">${a.q} vendu${a.q>1?'s':''}</div></div><span class="amt">${fmt(a.m)}</span></div>`).join('')||'<p class="empty">Aucune vente sur cette période.</p>'}</div>
   ${topC.length?`<h2>Meilleurs clients</h2><div class="list card">${topC.map((x,i)=>`<button class="row" onclick="go('contact','${x.c.id}')"><span class="rank">${i+1}</span><div class="main"><div class="title">${esc(x.c.nom)}</div>${balance(x.c.id)?`<div class="sub">Doit encore <span class="debt amt">${fmt(balance(x.c.id))}</span></div>`:''}</div><span class="amt">${fmt(x.m)}</span></button>`).join('')}</div>`:''}
   <div style="margin-top:20px"><button class="btn" onclick="partageRapport()">${I.msg}Envoyer le rapport sur WhatsApp</button></div>`}
-function partageRapport(){const P=periode(rper),R=chiffres(P);const lbl=d=>d.toLocaleDateString('fr-FR',{day:'numeric',month:'long'});
-  const per=rper==='jour'?`du ${lbl(P[0])}`:`du ${lbl(P[0])} au ${lbl(P[1])}`;
+function situationHtml(){const tr=treso(),st=tresoStarted();
+  const cli=S.contacts.filter(c=>c.type==='client').reduce((t,c)=>t+balance(c.id),0),fou=S.contacts.filter(c=>c.type==='fournisseur').reduce((t,c)=>t+balance(c.id),0);
+  const rev=S.articles.filter(a=>!isFab(a)),qte=rev.reduce((t,a)=>t+Math.max(0,a.stock),0),val=rev.reduce((t,a)=>t+Math.max(0,a.stock)*(a.pa||0),0),valV=rev.reduce((t,a)=>t+Math.max(0,a.stock)*(a.pv||0),0);
+  return `<h2>Situation aujourd'hui</h2><div class="list card">
+    <button class="row" onclick="go('treso')"><div class="main"><div class="sub">Argent disponible</div><div class="amt kpi">${st?fmt(tresoTotal(tr)):'—'}</div>${st?'':'<div class="sub small">Indiquez votre argent dans Trésorerie</div>'}</div>${I.chev}</button>
+    <button class="row" onclick="ctab='client';go('contacts')"><div class="main"><div class="sub">Les clients vous doivent</div><div class="amt kpi ${cli?'debt':''}">${fmt(cli)}</div></div>${I.chev}</button>
+    <button class="row" onclick="ctab='fournisseur';go('contacts')"><div class="main"><div class="sub">Vous devez aux fournisseurs</div><div class="amt kpi">${fmt(fou)}</div></div>${I.chev}</button>
+    <button class="row" onclick="go('articles')"><div class="main"><div class="sub">Stock restant</div><div class="amt kpi">${qte} article${qte>1?'s':''}</div>
+      <div class="sub small">${val?`Valeur à l'achat ${fmt(val)} · `:''}à la vente ${fmt(valV)}</div></div>${I.chev}</button></div>`}
+function partageRapport(){const P=periode(rper,roff),R=chiffres(P);
+  const per=titrePeriode(rper,P,roff);
   const arts={};R.ventes.forEach(o=>o.lignes.forEach(l=>{arts[l.nom]=(arts[l.nom]||0)+l.qte*l.prix}));
   const top=Object.entries(arts).sort((a,b)=>b[1]-a[1]).slice(0,3);
-  const msg=`*${S.boutique}* · Rapport ${per}\n\nVentes : ${fmt(R.totalV)} (${R.ventes.length})\nDépenses : ${fmt(R.totalD)}\nBénéfice net : ${R.benef<0?'− ':''}${fmt(Math.abs(R.benef))}\n\nArgent reçu : ${fmt(R.totalR)}\nVendu à crédit : ${fmt(R.credit)}${tresoStarted()?`\nArgent disponible aujourd'hui : ${fmt(tresoTotal(treso()))}`:''}${top.length?`\n\nTop articles :\n${top.map(([n,m])=>`• ${n} : ${fmt(m)}`).join('\n')}`:''}`;
+  const msg=`*${S.boutique}* · Rapport · ${per}\n\nVentes : ${fmt(R.totalV)} (${R.ventes.length})\nDépenses : ${fmt(R.totalD)}\nBénéfice net : ${R.benef<0?'− ':''}${fmt(Math.abs(R.benef))}\n\nArgent reçu : ${fmt(R.totalR)}\nVendu à crédit : ${fmt(R.credit)}${tresoStarted()?`\nArgent disponible aujourd'hui : ${fmt(tresoTotal(treso()))}`:''}${top.length?`\n\nTop articles :\n${top.map(([n,m])=>`• ${n} : ${fmt(m)}`).join('\n')}`:''}`;
   waSheet('Envoyer le rapport','',msg)}
 
 /* ---------- Articles ---------- */
