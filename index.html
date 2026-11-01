@@ -417,8 +417,9 @@ const TABS=[['home','Accueil',I.home],['vente','Vendre',I.cart],['achat','Achete
 function tabList(){return S.activite==='fabrique'?[TABS[0],TABS[1],['depense','Dépense',I.wallet],TABS[3],TABS[4]]:TABS}
 function go(v,p){view=v;param=p??null;render();window.scrollTo(0,0)}
 function render(){
-  const auth=!S;
+  const auth=!S||mustChange;
   $('header.top').hidden=auth;$('nav.tabs').hidden=auth;
+  if(S&&mustChange){$('#view').innerHTML=vNouveauCode();$('#cartbar').hidden=true;return}
   if(auth){$('#bname').textContent='Gespreneur';$('#hsub').textContent='';$('#view').innerHTML=vAuth();$('#cartbar').hidden=true;return}
   $('#bname').textContent=S.boutique;renderStatus();
   const V={home:vHome,vente:vSale,achat:vSale,contacts:vContacts,contact:vContact,articles:vArticles,rapports:vRapports,treso:vTreso}[view];
@@ -999,4 +1000,288 @@ function saveArticle(id){const nom=$('#fnom').value.trim();const pv=num($('#fpv'
   let a;if(id){a=A(id);Object.assign(a,{nom,pv,pa,photo:tmpPhoto,...extra},fab?{}:{seuil,base:stock-movement(id)})}
   else{a={id:uid(),nom,pv,pa,base:fab?0:stock,stock:fab?0:stock,seuil:fab?0:seuil,photo:tmpPhoto,...extra};S.articles.push(a)}
   touch('articles',a.id);commit();closeSheet();render();toast('Article enregistré')}
-function askDelArt(id){$('#delzone').innerHTML=`<p style="margin:0 0 10px"><b>Supprimer cet article 
+function askDelArt(id){$('#delzone').innerHTML=`<p style="margin:0 0 10px"><b>Supprimer cet article ?</b> Les anciennes ventes restent dans l'historique.</p><div class="row2"><button class="btn" onclick="articleForm('${id}')">Annuler</button><button class="btn danger" onclick="delArt('${id}')">Oui, supprimer</button></div>`}
+function delArt(id){S.articles=S.articles.filter(a=>a.id!==id);delete cart.lines[id];bury('articles',id);commit();closeSheet();render();toast('Article supprimé')}
+function shareCatalogue(){const list=S.articles.filter(a=>isFab(a)||a.stock>0);
+  const msg=`*${S.boutique}* · nos prix du jour\n\n${list.map(a=>`• ${a.nom} : ${fmt(a.pv)}`).join('\n')}\n\nCommandez directement sur WhatsApp !`;
+  waSheet('Partager le catalogue','',msg,'',`<p class="note">WhatsApp vous laissera choisir à qui l'envoyer (un client, un groupe ou votre statut).</p>`)}
+
+/* ---------- Réglages ---------- */
+function settings(){const a=S.auto;
+  openSheet(`<h3>Réglages</h3><div class="stack">
+  <label class="field" for="sbout">Nom de la boutique<input id="sbout" value="${esc(S.boutique)}"></label>
+  <div class="field">Votre activité${actSeg(S.activite)}</div>
+  <div class="card pad"><div class="switchrow"><div><b>Relance automatique</b><div class="sub">Rappel WhatsApp aux clients qui doivent de l'argent.</div></div>
+    <button id="sauto" role="switch" aria-label="Relance automatique" aria-checked="${a.on}" class="switch" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"><span></span></button></div>
+    <div class="sub" style="margin:14px 0 8px">Rappeler tous les</div>
+    <div class="seg" data-name="jours">${[7,15,30].map(j=>`<button data-v="${j}" class="${a.jours===j?'on':''}" onclick="segOn(this)">${j} jours</button>`).join('')}</div>
+    <p class="note">Dans ce prototype, la relance s'envoie en un clic. L'envoi tout seul viendra avec WhatsApp Business.</p></div>
+  <button class="btn primary" onclick="saveSettings()">Enregistrer</button>
+  ${installHtml()}
+  ${S.mode==='compte'?`<h4 style="margin-bottom:0">Compte</h4>
+  <div class="card pad"><div class="sub">Numéro</div><b class="amt">${esc(fmtTel(S.user.tel))}</b><div class="sub" style="margin-top:8px">${statusText()}</div></div>
+  <button class="btn" onclick="syncNow()">Synchroniser maintenant</button>
+  <button class="btn" onclick="changeCodeSheet()">Changer mon code secret</button>
+  ${S.isAdmin?`<h4 style="margin-bottom:0">Administration</h4><button class="btn" onclick="adminSheet()">Donner un code provisoire à un client</button>`:''}
+  <div id="logoutzone" class="stack"><button class="btn danger" onclick="logout()">Se déconnecter</button></div>`
+  :`<h4 style="margin-bottom:0">Démonstration</h4><p class="sub" style="margin:0">Ces données sont un exemple. Elles ne sont pas enregistrées en ligne.</p>
+  <button class="btn primary" onclick="exitDemo('signup')">Créer mon compte</button><button class="btn" onclick="exitDemo('login')">J'ai déjà un compte</button>`}
+  <h4 style="margin-bottom:0">Copie dans un fichier</h4><p class="sub" style="margin:0">${S.mode==='compte'?'Vos données sont enregistrées en ligne. Vous pouvez aussi en garder une copie.':"Gardez une copie, ou rechargez une ancienne sauvegarde."}</p>
+  <div class="row2"><button class="btn" onclick="exportData()">Sauvegarder</button><label class="btn" for="fimport" style="cursor:pointer">Restaurer</label></div>
+  <input id="fimport" type="file" accept="application/json,.json" hidden onchange="importData(this)">
+  <p id="imperr" class="err" hidden></p>
+  ${S.mode==='compte'?`<div id="datazone" class="stack"><button class="btn danger" onclick="resetData('vide')">Tout effacer</button></div>`:''}</div>`)}
+const ACTS=[['revente','Je revends'],['fabrique','Je fabrique'],['deux','Les deux']];
+const actSeg=cur=>`<div class="seg" data-name="activite">${ACTS.map(([k,l])=>`<button type="button" data-v="${k}" class="${cur===k?'on':''}" onclick="segOn(this)">${l}</button>`).join('')}</div>`;
+function setActivite(k){S.activite=k;if(S.mode==='compte')S.dirtyProfil=true;commit();render();toast("C'est noté")}
+function saveSettings(){S.boutique=$('#sbout').value.trim()||'Ma boutique';S.activite=segVal('activite')||S.activite;S.auto={on:$('#sauto').getAttribute('aria-checked')==='true',jours:num(segVal('jours'))||7};if(S.mode==='compte')S.dirtyProfil=true;commit();closeSheet();render();toast('Réglages enregistrés')}
+function buryAll(){S.articles.forEach(x=>bury('articles',x.id));S.contacts.forEach(x=>bury('contacts',x.id));(S.mvts||[]).forEach(x=>bury('mvts',x.id));S.ops.forEach(o=>{bury('ops',o.id);o.paiements.forEach(p=>bury('paiements',p.id))})}
+function resetData(k,ok){if(!ok){$('#datazone').innerHTML=`<p style="margin:0"><b>Effacer tous les clients, articles, opérations et mouvements d'argent, sur ce téléphone et en ligne ?</b></p>
+  <div class="row2"><button class="btn" onclick="settings()">Annuler</button><button class="btn danger" onclick="resetData('${k}',1)">Oui, tout effacer</button></div>`;return}
+  buryAll();S.articles=[];S.contacts=[];S.ops=[];S.mvts=[];
+  cart={type:null,lines:{},contactId:null,q:''};commit();closeSheet();go('home');toast('Tout est effacé')}
+
+/* ---------- Installation (PWA) ---------- */
+let installEvt=null;
+const isStandalone=()=>window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent);
+function showInstallBanner(){if(isStandalone())return false;try{if(localStorage.getItem('gp-noinstall'))return false}catch(e){}return !!installEvt||isIOS()}
+function hideInstall(){try{localStorage.setItem('gp-noinstall','1')}catch(e){}render()}
+async function installApp(){
+  if(installEvt){installEvt.prompt();const r=await installEvt.userChoice;installEvt=null;if(r.outcome==='accepted')toast('Application installée');render();return}
+  openSheet(`<h3>Installer l'application</h3><div class="stack">
+  ${isIOS()?`<p style="margin:0">Sur iPhone, dans Safari :</p><ol style="margin:0;padding-left:22px;line-height:1.7"><li>Touchez le bouton <b>Partager</b> (carré avec une flèche).</li><li>Choisissez <b>Sur l'écran d'accueil</b>.</li><li>Touchez <b>Ajouter</b>.</li></ol>`
+  :`<p style="margin:0">Dans Chrome, touchez le menu <b>⋮</b> en haut à droite, puis <b>Installer l'application</b> ou <b>Ajouter à l'écran d'accueil</b>.</p>`}
+  <button class="btn primary" onclick="closeSheet()">J'ai compris</button></div>`)}
+function installHtml(){if(isStandalone())return `<p class="sub" style="margin:0">L'application est installée sur ce téléphone.</p>`;
+  return `<button class="btn" onclick="installApp()">Installer l'application sur ce téléphone</button>`}
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvt=e;if(view==='home')render()});
+window.addEventListener('appinstalled',()=>{installEvt=null;toast('Application installée');render()});
+
+/* ---------- Sauvegarde ---------- */
+function exportData(){
+  const d=new Date().toISOString().slice(0,10);
+  const {boutique,auto,activite,articles,contacts,ops,mvts}=S;
+  const blob=new Blob([JSON.stringify({app:'gespreneur',version:3,date:new Date().toISOString(),data:{boutique,auto,activite,articles,contacts,ops,mvts}})],{type:'application/json'});
+  const name=`gespreneur-${S.boutique.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'boutique'}-${d}.json`;
+  const file=new File([blob],name,{type:'application/json'});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){navigator.share({files:[file],title:'Sauvegarde Gespreneur'}).then(()=>toast('Sauvegarde partagée')).catch(()=>{});return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000);toast('Sauvegarde téléchargée')}
+function importData(inp){const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{const err=$('#imperr');try{const j=JSON.parse(r.result);const d=j.data||j;
+      if(!Array.isArray(d.articles)||!Array.isArray(d.contacts)||!Array.isArray(d.ops))throw 0;
+      normalizeData(d);
+      if(S.mode==='compte'){buryAll();S.articles=d.articles;S.contacts=d.contacts;S.ops=d.ops;S.mvts=d.mvts;S.boutique=d.boutique||S.boutique;S.activite=d.activite||S.activite;S.dirtyProfil=true;touchAll()}
+      else S={mode:'demo',boutique:d.boutique||'Ma boutique',activite:d.activite||'deux',auto:d.auto||{on:false,jours:7},articles:d.articles,contacts:d.contacts,ops:d.ops,mvts:d.mvts};
+      cart={type:null,lines:{},contactId:null,q:''};commit();closeSheet();go('home');toast('Données restaurées')}
+    catch(e){err.textContent="Ce fichier n'est pas une sauvegarde Gespreneur.";err.hidden=false}};
+  r.readAsText(f)}
+
+/* ---------- Compte ---------- */
+let sb=null, authTab='login', legacy=null;
+const LEGACY_KEY='gespreneur-ancien';
+function initSb(){const c=window.GESPRENEUR_CONFIG;if(!window.supabase||!c||!c.url||/VOTRE/.test(c.url))return null;
+  try{return supabase.createClient(c.url,c.anonKey,{auth:{persistSession:true,autoRefreshToken:true,storageKey:'gespreneur-auth'}})}catch(e){return null}}
+const telEmail=t=>waNum(t)+'@tel.gespreneur.app';
+function fmtTel(t){const d=waNum(t);return d.startsWith('221')&&d.length===12?`+221 ${d.slice(3,5)} ${d.slice(5,8)} ${d.slice(8,10)} ${d.slice(10)}`:(d?'+'+d:'')}
+function normalizeData(d){d.articles=d.articles||[];d.contacts=d.contacts||[];d.ops=d.ops||[];d.mvts=d.mvts||[];
+  d.ops.forEach(o=>{o.paiements=(o.paiements||[]).map(p=>({...p,id:p.id||uid()}))});
+  d.articles.forEach(a=>{if(a.base==null){const m=d.ops.reduce((s,o)=>s+o.lignes.reduce((t,l)=>l.aid===a.id?t+(o.type==='achat'?l.qte:-l.qte):t,0),0);a.base=(a.stock||0)-m}});return d}
+function touchAll(){S.articles.forEach(x=>touch('articles',x.id));S.contacts.forEach(x=>touch('contacts',x.id));(S.mvts||[]).forEach(x=>touch('mvts',x.id));S.ops.forEach(o=>{touch('ops',o.id);o.paiements.forEach(p=>touch('paiements',p.id))})}
+
+function vAuth(){
+  if(!sb)return `<div class="auth stack"><div class="auth-head"><span class="mark xl">G</span><h1>Gespreneur</h1></div>
+    <p style="margin:0">L'application n'est pas encore reliée au serveur. Le fichier <b>config.js</b> doit contenir l'adresse et la clé du projet Supabase.</p>
+    <button class="btn" onclick="startDemo()">Voir une démonstration</button></div>`;
+  const up=authTab==='signup';
+  return `<div class="auth"><div class="auth-head"><span class="mark xl">G</span><h1>Gespreneur</h1><p class="sub" style="margin:0">Vos ventes, votre stock et vos clients, simplement.</p></div>
+  <div class="seg" style="margin-bottom:18px"><button class="${up?'':'on'}" onclick="authTab='login';render()">Se connecter</button><button class="${up?'on':''}" onclick="authTab='signup';render()">Créer un compte</button></div>
+  <form class="stack" onsubmit="event.preventDefault();doAuth()">
+    ${up?`<label class="field" for="about">Nom de votre boutique<input id="about" autocomplete="organization" placeholder="Ex. Boutique Ndiaye"></label>`:''}
+    <label class="field" for="atel">Numéro de téléphone<input id="atel" inputmode="tel" autocomplete="tel" placeholder="77 123 45 67"></label>
+    <label class="field" for="apin">${up?'Choisissez un code secret (6 chiffres)':'Code secret (6 chiffres)'}<input id="apin" type="password" inputmode="numeric" maxlength="6" autocomplete="${up?'new-password':'current-password'}"></label>
+    ${up?`<label class="field" for="apin2">Retapez le code<input id="apin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>
+    <div class="field">Votre activité${actSeg(null)}</div>`:''}
+    <p id="aerr" class="err" hidden></p>
+    <button id="abtn" class="btn primary" type="submit">${up?'Créer mon compte':'Se connecter'}</button>
+  </form>
+  ${up?'':`<div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="oubliSheet()">Code oublié ?</button></div>`}
+  ${legacy?`<p class="note">Les données déjà présentes sur ce téléphone seront ajoutées à votre compte.</p>`:''}
+  <button class="btn" style="margin-top:12px;border-color:transparent;background:transparent" onclick="startDemo()">Voir une démonstration</button></div>`}
+async function doAuth(){const up=authTab==='signup';const err=$('#aerr'),btn=$('#abtn');
+  const show=m=>{err.textContent=m;err.hidden=false;btn.disabled=false;btn.textContent=up?'Créer mon compte':'Se connecter'};
+  const d=waNum($('#atel').value),pin=$('#apin').value.trim();
+  if(d.length<11)return show('Écrivez votre numéro de téléphone.');
+  if(!/^\d{6}$/.test(pin))return show('Le code doit avoir 6 chiffres.');
+  if(up&&pin!==$('#apin2').value.trim())return show('Les deux codes ne sont pas pareils.');
+  if(up&&!$('#about').value.trim())return show('Écrivez le nom de votre boutique.');
+  const act=up?segVal('activite'):null;if(up&&!act)return show('Choisissez votre activité : je revends, je fabrique, ou les deux.');
+  if(!navigator.onLine)return show('Pas de connexion internet. Réessayez quand le réseau revient.');
+  err.hidden=true;btn.disabled=true;btn.textContent='Un instant…';
+  try{const r=up?await sb.auth.signUp({email:telEmail(d),password:pin,options:{data:{telephone:'+'+d}}})
+                :await sb.auth.signInWithPassword({email:telEmail(d),password:pin});
+    if(r.error)throw r.error;
+    if(!r.data.session)return show("Compte créé, mais la connexion est bloquée : dans Supabase, désactivez « Confirm email ».");
+    startAccount(r.data.session.user,up?$('#about').value.trim():null,'+'+d,act);
+  }catch(e){const m=String(e.message||e);
+    show(/invalid login/i.test(m)?'Numéro ou code incorrect.':/already|exists/i.test(m)?'Ce numéro a déjà un compte. Touchez « Se connecter ».'
+      :/fetch|network/i.test(m)?'Pas de connexion au serveur. Vérifiez internet.':/rate|too many/i.test(m)?"Trop d'essais. Attendez quelques minutes.":'Erreur : '+m)}}
+function startAccount(u,boutique,tel,act){
+  S=emptyAccount(u,boutique);S.user.tel=tel||S.user.tel;if(act)S.activite=act;if(boutique)S.dirtyProfil=true;
+  if(legacy){normalizeData(legacy);S.articles=legacy.articles;S.contacts=legacy.contacts;S.ops=legacy.ops;S.mvts=legacy.mvts;touchAll();legacy=null;try{localStorage.removeItem(LEGACY_KEY)}catch(e){}}
+  mustChange=!!(u.user_metadata&&u.user_metadata.must_change);
+  view='home';commit();render();window.scrollTo(0,0);toast(mustChange?'Choisissez votre nouveau code':boutique?'Compte créé':'Connecté');sync();checkAdmin()}
+function startDemo(){S=seed();recomputeStock();view='home';save();render()}
+function exitDemo(tab){S=null;authTab=tab==='login'?'login':'signup';save();closeSheet();render();window.scrollTo(0,0)}
+async function logout(step){const z=$('#logoutzone');const n=pending();
+  if(!step){z.innerHTML=`<p style="margin:0"><b>${n?`${n} modification${n>1?'s':''} pas encore envoyée${n>1?'s':''}. Elles seront envoyées avant la déconnexion.`:'Se déconnecter de ce téléphone ?'}</b></p>
+    <div class="row2"><button class="btn" onclick="settings()">Annuler</button><button class="btn danger" onclick="logout(1)">Se déconnecter</button></div>`;return}
+  if(step===1&&n){await sync();if(pending()){z.innerHTML=`<p class="err" style="margin:0">Impossible d'envoyer ${pending()} modification(s) (pas d'internet ?). En vous déconnectant maintenant, elles seront perdues.</p>
+    <div class="row2"><button class="btn" onclick="settings()">Annuler</button><button class="btn danger" onclick="logout(2)">Perdre et quitter</button></div>`;return}}
+  try{await sb.auth.signOut()}catch(e){}
+  S=null;mustChange=false;authTab='login';save();closeSheet();render();window.scrollTo(0,0)}
+function reloginSheet(){openSheet(`<h3>Reconnexion</h3><p class="sub" style="margin:-8px 0 14px">${esc(fmtTel(S.user.tel))}</p>
+  <form class="stack" onsubmit="event.preventDefault();relogin()"><label class="field" for="rpin">Code secret<input id="rpin" type="password" inputmode="numeric" maxlength="6" autocomplete="current-password"></label>
+  <p id="rerr" class="err" hidden></p><button class="btn primary" type="submit">Se reconnecter</button></form>`)}
+async function relogin(){const e=$('#rerr');
+  try{const r=await sb.auth.signInWithPassword({email:telEmail(S.user.tel),password:$('#rpin').value.trim()});if(r.error)throw r.error;
+    if(r.data.user.id!==S.user.id)throw new Error('autre compte');closeSheet();syncErr='';toast('Reconnecté');sync()}
+  catch(x){e.textContent=/invalid/i.test(x.message)?'Code incorrect.':'Reconnexion impossible : '+x.message;e.hidden=false}}
+
+/* ---------- Code oublié, changement de code, administration ---------- */
+let mustChange=false;
+const supportTel=()=>{const c=window.GESPRENEUR_CONFIG||{};return c.support&&!/VOTRE/.test(c.support)?c.support:''};
+function oubliSheet(){const t=($('#atel')&&$('#atel').value)||'';const sup=supportTel();
+  const msg=`Bonjour, j'ai oublié mon code secret Gespreneur.\nMon numéro de compte : ${fmtTel(t)||'(à compléter)'}\nMerci de m'envoyer un code provisoire.`;
+  if(!sup){openSheet(`<h3>Code oublié</h3><div class="stack"><p style="margin:0">Contactez la personne qui vous a donné l'application. Elle peut vous donner un code provisoire.</p><button class="btn primary" onclick="closeSheet()">J'ai compris</button></div>`);return}
+  waSheet('Code oublié',sup,msg,'',`<p class="note">Vous recevrez un <b>code provisoire</b> sur WhatsApp. Connectez-vous avec ce code : l'application vous demandera ensuite de choisir un nouveau code.</p>`)}
+const codeForm=(btn,fn)=>`<form class="stack" onsubmit="event.preventDefault();${fn}">
+  <label class="field" for="ncode">Nouveau code (6 chiffres)<input id="ncode" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>
+  <label class="field" for="ncode2">Retapez le code<input id="ncode2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>
+  <p id="nerr" class="err" hidden></p><button id="nbtn" class="btn primary" type="submit">${btn}</button></form>`;
+function vNouveauCode(){return `<div class="auth"><div class="auth-head"><span class="mark xl">G</span><h1>Nouveau code</h1>
+  <p class="sub" style="margin:0">Vous êtes connecté avec un code provisoire. Choisissez votre code secret personnel.</p></div>${codeForm('Enregistrer mon code','saveCode(true)')}
+  <div style="text-align:center;margin-top:12px"><button class="linkbtn" onclick="logout(2)">Se déconnecter</button></div></div>`}
+function changeCodeSheet(){openSheet(`<h3>Changer mon code secret</h3>${codeForm('Enregistrer','saveCode(false)')}`)}
+async function saveCode(forced){const e=$('#nerr'),btn=$('#nbtn'),c1=$('#ncode').value.trim(),c2=$('#ncode2').value.trim();
+  const show=m=>{e.textContent=m;e.hidden=false;btn.disabled=false;btn.textContent=forced?'Enregistrer mon code':'Enregistrer'};
+  if(!/^\d{6}$/.test(c1))return show('Le code doit avoir 6 chiffres.');if(c1!==c2)return show('Les deux codes ne sont pas pareils.');
+  if(!navigator.onLine)return show('Pas de connexion internet. Réessayez quand le réseau revient.');
+  btn.disabled=true;btn.textContent='Un instant…';
+  try{const r=await sb.auth.updateUser({password:c1,data:{must_change:false}});if(r.error)throw r.error;
+    mustChange=false;closeSheet();render();toast('Nouveau code enregistré')}
+  catch(x){const m=String(x.message||x);show(/same|different/i.test(m)?"Choisissez un code différent de l'ancien.":/fetch|network/i.test(m)?'Pas de connexion au serveur.':'Erreur : '+m)}}
+async function checkAdmin(){if(!sb||!S||S.mode!=='compte'||!navigator.onLine)return;
+  try{const r=await sb.rpc('is_admin');if(!r.error&&S){const v=r.data===true;if(v!==!!S.isAdmin){S.isAdmin=v;save()}}}catch(e){}}
+function adminSheet(){openSheet(`<h3>Code provisoire</h3><p class="sub" style="margin:-8px 0 14px">Pour un client qui a oublié son code. Son ancien code ne marchera plus.</p>
+  <form class="stack" onsubmit="event.preventDefault();adminReset()"><label class="field" for="adtel">Numéro du client<input id="adtel" inputmode="tel" placeholder="77 123 45 67"></label>
+  <p id="aderr" class="err" hidden></p><button id="adbtn" class="btn primary" type="submit">Créer un code provisoire</button></form><div id="adres"></div>`)}
+async function adminReset(){const e=$('#aderr'),btn=$('#adbtn'),t=$('#adtel').value;const d=waNum(t);
+  if(d.length<11){e.textContent='Écrivez le numéro du client.';e.hidden=false;return}
+  e.hidden=true;btn.disabled=true;btn.textContent='Un instant…';
+  try{const r=await sb.rpc('admin_reset_pin',{p_tel:'+'+d});if(r.error)throw r.error;const code=r.data;
+    const msg=`Bonjour, voici votre code provisoire Gespreneur : *${code}*\nConnectez-vous avec votre numéro et ce code. L'application vous demandera ensuite de choisir votre nouveau code secret.`;
+    btn.disabled=false;btn.textContent='Créer un code provisoire';
+    $('#adres').innerHTML=`<div class="card pad stack" style="margin-top:14px"><div class="sub">Code provisoire pour ${esc(fmtTel(t))}</div><div class="amt" style="font-size:36px;letter-spacing:.12em">${esc(code)}</div>
+      <a class="btn primary" href="${waLink('+'+d,msg)}" target="_blank" rel="noopener">${I.msg}Envoyer au client sur WhatsApp</a></div>`}
+  catch(x){const m=String(x.message||x);e.textContent=/aucun compte/i.test(m)?"Aucun compte avec ce numéro.":/refus/i.test(m)?"Ce compte n'est pas administrateur.":/function|schema/i.test(m)?'La base doit être mise à jour (migration-4.sql).':'Erreur : '+m;
+    e.hidden=false;btn.disabled=false;btn.textContent='Créer un code provisoire'}}
+
+/* ---------- Synchronisation ---------- */
+// Chaque modification est gardée dans une file d'attente sur le téléphone, puis envoyée dès qu'il y a internet.
+let syncing=false, syncAgain=false, syncTimer=null, lastSync=null, syncErr='';
+const T={articles:'articles',contacts:'contacts',ops:'operations',paiements:'paiements',mvts:'mouvements'};
+function findPay(id){for(const o of S.ops)for(const p of o.paiements)if(p.id===id)return [o,p];return null}
+function toRow(t,id){const owner=S.user.id;
+  if(t==='articles'){const a=A(id);return a&&{owner,id,nom:a.nom,pv:a.pv,pa:a.pa,base:a.base||0,seuil:a.seuil,photo:a.photo,genre:a.genre||'revente',recette:a.recette||null,portions:a.portions||null,deleted:false}}
+  if(t==='mvts'){const m=(S.mvts||[]).find(x=>x.id===id);return m&&{owner,id,date:m.date,type:m.type,montant:m.montant,mode:m.mode,vers:m.vers||null,note:m.note||null,deleted:false}}
+  if(t==='contacts'){const c=C(id);return c&&{owner,id,type:c.type,nom:c.nom,tel:c.tel,relance:c.relance,deleted:false}}
+  if(t==='ops'){const o=S.ops.find(x=>x.id===id);return o&&{owner,id,type:o.type,contact_id:o.contactId,date:o.date,lignes:o.lignes,total:o.total,
+    livraison:o.livraison||null,livraison_prevue:o.livraison_prevue||null,livraison_note:o.livraison_note||null,livre_le:o.livre_le||null,deleted:false}}
+  const f=findPay(id);return f&&{owner,id,op_id:f[0].id,date:f[1].date,montant:f[1].montant,mode:f[1].mode,deleted:false}}
+function applyRow(t,r){
+  if(t==='mvts')S.mvts=S.mvts||[];
+  const list=t==='articles'?S.articles:t==='contacts'?S.contacts:t==='ops'?S.ops:t==='mvts'?S.mvts:null;
+  if(list){const i=list.findIndex(x=>x.id===r.id);if(r.deleted){if(i>=0)list.splice(i,1);return}
+    const x=t==='articles'?{id:r.id,nom:r.nom||'',pv:+r.pv||0,pa:+r.pa||0,base:+r.base||0,seuil:+r.seuil||0,photo:r.photo||null,stock:0,genre:r.genre||'revente',recette:r.recette||null,portions:r.portions||null}
+      :t==='mvts'?{id:r.id,date:r.date,type:r.type,montant:+r.montant||0,mode:r.mode,vers:r.vers||null,note:r.note||null}
+      :t==='contacts'?{id:r.id,type:r.type,nom:r.nom||'',tel:r.tel||'',relance:r.relance||null}
+      :{id:r.id,type:r.type,contactId:r.contact_id||null,date:r.date,lignes:r.lignes||[],total:+r.total||0,paiements:i>=0?list[i].paiements:[],
+        ...(r.livraison?{livraison:r.livraison,livraison_prevue:r.livraison_prevue||null,livraison_note:r.livraison_note||null,livre_le:r.livre_le||null}:{})};
+    if(i>=0)list[i]=x;else list.push(x);return}
+  S.ops.forEach(o=>{const j=o.paiements.findIndex(p=>p.id===r.id);if(j>=0)o.paiements.splice(j,1)});
+  if(r.deleted)return;const o=S.ops.find(x=>x.id===r.op_id);
+  if(o){o.paiements.push({id:r.id,date:r.date,montant:+r.montant||0,mode:r.mode});o.paiements.sort((a,b)=>a.date.localeCompare(b.date))}}
+async function push(){const owner=S.user.id;
+  if(S.dirtyProfil){S.dirtyProfil=false;const r=await sb.from('profils').upsert({owner,telephone:S.user.tel,boutique:S.boutique,activite:S.activite||null,auto_on:S.auto.on,auto_jours:S.auto.jours});if(r.error){S.dirtyProfil=true;throw r.error}}
+  for(const t of TABLES){
+    const snap={...S.dirty[t]},ids=Object.keys(snap),rows=ids.map(id=>toRow(t,id)).filter(Boolean);
+    for(let i=0;i<rows.length;i+=200){const r=await sb.from(T[t]).upsert(rows.slice(i,i+200),{onConflict:'owner,id'});if(r.error)throw r.error}
+    ids.forEach(id=>{if(S.dirty[t][id]===snap[id])delete S.dirty[t][id]});
+    const tombs=Object.keys(S.tomb[t]);
+    if(tombs.length){const r=await sb.from(T[t]).upsert(tombs.map(id=>({owner,id,deleted:true})),{onConflict:'owner,id'});if(r.error)throw r.error;tombs.forEach(id=>delete S.tomb[t][id])}
+    save()}}
+async function pull(){
+  const since=S.lastPull?new Date(new Date(S.lastPull).getTime()-120000).toISOString():'1970-01-01T00:00:00Z';
+  const get=async tb=>{let all=[];for(let from=0;;from+=1000){const r=await sb.from(tb).select('*').gt('updated_at',since).order('updated_at').range(from,from+999);
+    if(r.error)throw r.error;all=all.concat(r.data);if(r.data.length<1000)return all}};
+  const data={};for(const t of TABLES)data[t]=await get(T[t]);
+  const pr=await sb.from('profils').select('*').maybeSingle();if(pr.error)throw pr.error;
+  let changed=false,max=S.lastPull;
+  if(pr.data&&!S.dirtyProfil){if(pr.data.boutique&&pr.data.boutique!==S.boutique){S.boutique=pr.data.boutique;changed=true}S.auto={on:!!pr.data.auto_on,jours:pr.data.auto_jours||7};if(pr.data.activite&&pr.data.activite!==S.activite){S.activite=pr.data.activite;changed=true}}
+  for(const t of TABLES)for(const r of data[t]){if(!max||new Date(r.updated_at)>new Date(max))max=r.updated_at;
+    if(S.dirty[t][r.id]||S.tomb[t][r.id])continue;applyRow(t,r);changed=true}
+  S.lastPull=max;return changed}
+async function sync(){
+  if(!S||S.mode!=='compte'||!sb)return;
+  if(!navigator.onLine){renderStatus();return}
+  if(syncing){syncAgain=true;return}
+  syncing=true;renderStatus();
+  try{const {data}=await sb.auth.getSession();
+    if(!data.session||data.session.user.id!==S.user.id){syncErr='session';return}
+    await push();const changed=await pull();lastSync=new Date();syncErr='';recomputeStock();save();
+    const typing=document.activeElement&&document.activeElement.closest&&document.activeElement.closest('#view input');
+    if(changed&&$('#sheet').hidden&&!typing)render();
+  }catch(e){const m=String(e.message||e);syncErr=/column|schema cache|check constraint|does not exist|violates check/i.test(m)?'schema':m;console.warn('Synchronisation :',e)}
+  finally{syncing=false;renderStatus();if(syncAgain){syncAgain=false;setTimeout(sync,400)}}}
+function scheduleSync(){if(!S||S.mode!=='compte')return;renderStatus();clearTimeout(syncTimer);syncTimer=setTimeout(sync,1500)}
+async function syncNow(){if(!navigator.onLine){toast('Pas de connexion internet');return}await sync();toast(syncErr?'Synchronisation impossible':'Données à jour');if(!$('#sheet').hidden)settings()}
+function statusInfo(){if(!S)return ['',''];if(S.mode==='demo')return ['','Démonstration'];const n=pending();
+  if(!sb)return ['warn','Serveur non configuré'];
+  if(!navigator.onLine)return ['warn',n?`Hors ligne · ${n} en attente`:'Hors ligne'];
+  if(syncing)return ['','Synchronisation…'];
+  if(syncErr==='session')return ['warn','Reconnexion nécessaire'];
+  if(syncErr==='schema')return ['warn',n?`Base à mettre à jour · ${n} en attente`:'Base à mettre à jour'];
+  if(syncErr)return ['warn',n?`Erreur · ${n} en attente`:'Erreur de synchronisation'];
+  if(n)return ['',`${n} en attente`];
+  return ['ok',lastSync?'Synchronisé':'Connecté']}
+const statusText=()=>statusInfo()[1];
+function renderStatus(){const el=$('#hsub');if(!el||!S)return;const [c,t]=statusInfo();
+  el.innerHTML=S.mode==='demo'?t:`<button class="status ${c}" onclick="${syncErr==='session'?'reloginSheet()':'syncNow()'}"><span class="dot"></span>${t}</button>`}
+window.addEventListener('online',()=>sync());
+window.addEventListener('offline',renderStatus);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')sync()});
+setInterval(()=>sync(),60000);
+
+/* ---------- Démarrage ---------- */
+async function boot(){
+  $('#gearbtn').innerHTML=I.gear;
+  sb=initSb();
+  let st=load();
+  // Données d'une version sans compte : gardées pour être ajoutées au compte
+  if(st&&!st.mode){if(!st.exemple&&((st.articles||[]).length||(st.contacts||[]).length||(st.ops||[]).length)){try{localStorage.setItem(LEGACY_KEY,JSON.stringify(st))}catch(e){}}st=null}
+  try{legacy=JSON.parse(localStorage.getItem(LEGACY_KEY)||'null')}catch(e){}
+  S=st;
+  if(S){if(!S.dirty&&S.mode==='compte'){S.dirty=blank();S.tomb=blank()}S.mvts=S.mvts||[];if(S.dirty){S.dirty.mvts=S.dirty.mvts||{};S.tomb.mvts=S.tomb.mvts||{}}recomputeStock()}
+  {const h=location.hash.slice(1);if(S&&(h==='vente'||h==='achat'))view=h;if(h)history.replaceState(null,'',location.pathname)}
+  if(S&&S.mode==='compte'&&sb){try{const {data}=await sb.auth.getSession();const u=data.session&&data.session.user;
+    if(u&&u.id===S.user.id&&u.user_metadata&&u.user_metadata.must_change)mustChange=true}catch(e){}}
+  render();
+  if(S&&S.mode==='compte'){sync();checkAdmin()}
+}
+boot();
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
+</script>
+</body>
+</html>

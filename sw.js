@@ -1,6 +1,6 @@
 // Gespreneur — fonctionnement hors connexion.
 // Changez VERSION à chaque mise à jour de l'application pour que les téléphones reçoivent la nouvelle version.
-const VERSION = 'gp-v8';
+const VERSION = 'gp-v9';
 const APP = [
   './',
   './index.html',
