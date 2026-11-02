@@ -191,6 +191,8 @@ nav.tabs button.on .ic{stroke-width:2.4}
 .pnav button{width:48px;height:48px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface);display:grid;place-items:center;flex:none}
 .pnav button:disabled{opacity:.35;cursor:default}
 .pnav-t{font-weight:700;font-size:16px;margin:0 0 12px}
+.kqte{margin-top:8px;font-size:17px}
+.kqte b{font-variant-numeric:tabular-nums}
 .kgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
 .kcard{padding:14px;min-width:0}
 .kcard .amt{display:block;font-size:20px;margin-top:4px}
@@ -866,8 +868,15 @@ function chiffres([s,e]){const inP=d=>{const t=new Date(d);return t>=s&&t<=e};
     totalD:depenses.reduce((t,o)=>t+o.total,0),
     remises:ventes.reduce((t,o)=>t+o.lignes.reduce((u,l)=>u+(l.prixNormal!=null?(l.prixNormal-l.prix)*l.qte:0),0),0),
     offerts:ventes.reduce((t,o)=>t+o.lignes.reduce((u,l)=>u+(l.offert?l.qte:0),0),0),
+    qte:ventes.reduce((t,o)=>t+o.lignes.reduce((u,l)=>u+l.qte,0),0),
     retraits:(S.mvts||[]).filter(m=>m.type==='retrait'&&inP(m.date)).reduce((t,m)=>t+m.montant,0)};
   R.benef=R.totalV-R.coutRev-R.totalD;return R}
+function parArticle(ventes){const arts={};
+  ventes.forEach(o=>o.lignes.forEach(l=>{const a=A(l.aid);const k=l.aid||l.nom;
+    const x=arts[k]=arts[k]||{nom:a?a.nom:String(l.nom).replace(/\s*\(cadeau\)\s*$/i,''),q:0,off:0,m:0};
+    if(l.offert)x.off+=l.qte;else x.q+=l.qte;x.m+=l.qte*l.prix}));
+  return Object.values(arts).sort((a,b)=>b.m-a.m||b.q-a.q)}
+const qteTxt=a=>`${a.q} vendu${a.q>1?'s':''}${a.off?` · ${a.off} offert${a.off>1?'s':''}`:''}`;
 const COMP={jour:'à la veille',mois:"au mois d'avant",annee:"à l'année d'avant"};
 function evolution(now,before,k){if(before==null)return '';if(!before)return now?'<span class="pill">Nouveau</span>':'';const p=Math.round((now-before)/before*100);
   return `<span class="pill ${p<0?'down':''}">${p>=0?'▲':'▼'} ${Math.abs(p)} %</span> <span class="sub">par rapport ${COMP[k]}</span>`}
@@ -891,8 +900,7 @@ function vRapports(){const P=periode(rper,roff),[s,e]=P,R=chiffres(P),AV=avant(r
   // Modes de paiement
   const modes=MODES.map(m=>[m,R.recu.filter(p=>p.mode===m).reduce((t,p)=>t+p.montant,0)]).filter(x=>x[1]);
   // Articles
-  const arts={};R.ventes.forEach(o=>o.lignes.forEach(l=>{const k=l.aid;arts[k]=arts[k]||{nom:l.nom,q:0,m:0};arts[k].q+=l.qte;arts[k].m+=l.qte*l.prix}));
-  const topA=Object.values(arts).sort((a,b)=>b.m-a.m).slice(0,5);
+  const topA=parArticle(R.ventes).slice(0,5);
   // Clients
   const cl={};R.ventes.filter(o=>o.contactId).forEach(o=>{cl[o.contactId]=(cl[o.contactId]||0)+o.total});
   const topC=Object.entries(cl).map(([id,m])=>({c:C(id),m})).filter(x=>x.c).sort((a,b)=>b.m-a.m).slice(0,5);
@@ -901,7 +909,8 @@ function vRapports(){const P=periode(rper,roff),[s,e]=P,R=chiffres(P),AV=avant(r
   <div class="seg perseg" style="margin-bottom:10px">${PERIODES.map(([k,l])=>`<button class="${rper===k?'on':''}" onclick="setPer('${k}')">${l}</button>`).join('')}</div>
   ${rper==='tout'?`<p class="pnav-t">${titre}</p>`:`<div class="pnav"><button aria-label="Période précédente" onclick="navPer(-1)" ${auBout?'disabled':''}>${I.back}</button><b>${titre}</b><button aria-label="Période suivante" onclick="navPer(1)" ${roff>=0?'disabled':''}>${I.chev}</button></div>`}
   <div class="card kmain"><div class="sub">Total des ventes</div><span class="amt">${fmt(R.totalV)}</span>
-    <div>${B?evolution(R.totalV,B.totalV,rper):''}</div><div class="sub" style="margin-top:6px">${R.ventes.length} vente${R.ventes.length>1?'s':''}</div></div>
+    <div>${B?evolution(R.totalV,B.totalV,rper):''}</div><div class="kqte"><b>${R.qte-R.offerts}</b> article${R.qte-R.offerts>1?'s':''} vendu${R.qte-R.offerts>1?'s':''}${R.offerts?` <span class="sub">+ ${R.offerts} offert${R.offerts>1?'s':''}</span>`:''}</div>
+    <div class="sub">en ${R.ventes.length} commande${R.ventes.length>1?'s':''}</div></div>
   ${rper==='tout'?situationHtml():''}
   <h2>Bénéfice</h2>
   <div class="card pad"><div class="sums">
@@ -920,7 +929,7 @@ function vRapports(){const P=periode(rper,roff),[s,e]=P,R=chiffres(P),AV=avant(r
   ${chart}
   ${depBlock}
   ${modes.length?`<h2>Argent reçu par mode</h2><div class="list card">${modes.map(([m,v])=>`<div class="row"><div class="main"><div style="display:flex;justify-content:space-between;gap:10px"><b>${m}</b><span class="amt">${fmt(v)}</span></div><div class="meter"><i style="width:${Math.round(v/R.totalR*100)}%"></i></div></div></div>`).join('')}</div>`:''}
-  <h2>Articles les plus vendus</h2><div class="list card">${topA.map((a,i)=>`<div class="row"><span class="rank">${i+1}</span><div class="main"><div class="title">${esc(a.nom)}</div><div class="sub">${a.q} vendu${a.q>1?'s':''}</div></div><span class="amt">${fmt(a.m)}</span></div>`).join('')||'<p class="empty">Aucune vente sur cette période.</p>'}</div>
+  <h2>Articles les plus vendus</h2><div class="list card">${topA.map((a,i)=>`<div class="row"><span class="rank">${i+1}</span><div class="main"><div class="title">${esc(a.nom)}</div><div class="sub">${qteTxt(a)}</div></div><span class="amt">${fmt(a.m)}</span></div>`).join('')||'<p class="empty">Aucune vente sur cette période.</p>'}</div>
   ${topC.length?`<h2>Meilleurs clients</h2><div class="list card">${topC.map((x,i)=>`<button class="row" onclick="go('contact','${x.c.id}')"><span class="rank">${i+1}</span><div class="main"><div class="title">${esc(x.c.nom)}</div>${balance(x.c.id)?`<div class="sub">Doit encore <span class="debt amt">${fmt(balance(x.c.id))}</span></div>`:''}</div><span class="amt">${fmt(x.m)}</span></button>`).join('')}</div>`:''}
   <div style="margin-top:20px"><button class="btn" onclick="partageRapport()">${I.msg}Envoyer le rapport sur WhatsApp</button></div>`}
 function situationHtml(){const tr=treso(),st=tresoStarted();
@@ -934,9 +943,8 @@ function situationHtml(){const tr=treso(),st=tresoStarted();
       <div class="sub small">${val?`Valeur à l'achat ${fmt(val)} · `:''}à la vente ${fmt(valV)}</div></div>${I.chev}</button></div>`}
 function partageRapport(){const P=periode(rper,roff),R=chiffres(P);
   const per=titrePeriode(rper,P,roff);
-  const arts={};R.ventes.forEach(o=>o.lignes.forEach(l=>{arts[l.nom]=(arts[l.nom]||0)+l.qte*l.prix}));
-  const top=Object.entries(arts).sort((a,b)=>b[1]-a[1]).slice(0,3);
-  const msg=`*${S.boutique}* · Rapport · ${per}\n\nVentes : ${fmt(R.totalV)} (${R.ventes.length})\nDépenses : ${fmt(R.totalD)}\nBénéfice net : ${R.benef<0?'− ':''}${fmt(Math.abs(R.benef))}\n\nArgent reçu : ${fmt(R.totalR)}\nVendu à crédit : ${fmt(R.credit)}${tresoStarted()?`\nArgent disponible aujourd'hui : ${fmt(tresoTotal(treso()))}`:''}${top.length?`\n\nTop articles :\n${top.map(([n,m])=>`• ${n} : ${fmt(m)}`).join('\n')}`:''}`;
+  const top=parArticle(R.ventes).slice(0,3);
+  const msg=`*${S.boutique}* · Rapport · ${per}\n\nVentes : ${fmt(R.totalV)}\nArticles vendus : ${R.qte-R.offerts}${R.offerts?` (+ ${R.offerts} offert${R.offerts>1?'s':''})`:''} en ${R.ventes.length} commande${R.ventes.length>1?'s':''}${R.coutRev?`\nCoût des articles vendus : ${fmt(R.coutRev)}`:''}\nDépenses : ${fmt(R.totalD)}\nBénéfice net : ${R.benef<0?'− ':''}${fmt(Math.abs(R.benef))}${R.remises?`\nRemises et cadeaux : ${fmt(R.remises)}`:''}\n\nArgent reçu : ${fmt(R.totalR)}\nVendu à crédit : ${fmt(R.credit)}${tresoStarted()?`\nArgent disponible aujourd'hui : ${fmt(tresoTotal(treso()))}`:''}${top.length?`\n\nTop articles :\n${top.map(a=>`• ${a.nom} : ${fmt(a.m)} (${qteTxt(a)})`).join('\n')}`:''}`;
   waSheet('Envoyer le rapport','',msg)}
 
 /* ---------- Articles ---------- */
@@ -975,7 +983,8 @@ function setGenre(g){fGenre=g;const f=g==='fabrique';$('#g-fab').hidden=!f;$('#g
 function majMarge(){const el=$('#marge');if(!el)return;const pv=num($('#fpv').value),pa=num($('#fpa').value);
   if(!pv||!pa){el.hidden=true;return}const m=pv-pa;el.hidden=false;el.className='restebox'+(m<0?' is-debt':'');
   el.innerHTML=m<0?`Vous perdez <span class="amt">${fmt(-m)}</span> par unité<div class="sub">Le prix de vente est plus bas que le ${fGenre==='fabrique'?'coût':"prix d'achat"}.</div>`
-    :`Marge : <span class="amt">${fmt(m)}</span> par unité (${Math.round(m/pv*100)} %)<div class="sub">${fGenre==='fabrique'?'Estimation, pour vous aider à fixer votre prix.':'Ce que vous gagnez sur chaque article vendu.'}</div>`}
+    :`Marge : <span class="amt">${fmt(m)}</span> par unité (${Math.round(m/pv*100)} %)<div class="sub">${fGenre==='fabrique'?'Estimation, pour vous aider à fixer votre prix.':'Ce que vous gagnez sur chaque article vendu.'}</div>
+      ${fGenre==='fabrique'&&m/pv>0.85?`<div class="sub" style="margin-top:6px;font-weight:700">Coût très bas : vérifiez que vous avez divisé par le nombre d'articles vendus (box, plateaux…) et non par le nombre de pièces.</div>`:''}`}
 function toggleCalc(){const el=$('#calc');el.hidden=!el.hidden;$('#calcbtn').hidden=!el.hidden;if(!el.hidden)renderCalc()}
 function renderCalc(){$('#calc').innerHTML=`<div class="card pad stack calcbox">
   <div><b>Ce que vous dépensez pour une fournée</b><div class="sub">Ingrédients, gaz, emballages…</div></div>
@@ -983,10 +992,11 @@ function renderCalc(){$('#calc').innerHTML=`<div class="card pad stack calcbox">
     <input aria-label="Montant" inputmode="numeric" placeholder="Montant" value="${l.montant}" oninput="calc.lignes[${i}].montant=num(this.value);calcMaj()">
     <button aria-label="Retirer la ligne" onclick="calc.lignes.splice(${i},1);renderCalc();calcMaj()">×</button></div>`).join('')}
   <button class="btn small" onclick="calc.lignes.push({nom:'',montant:''});renderCalc()">${I.plus}Ajouter une ligne</button>
-  <label class="field" for="cportions">Combien d'unités vous obtenez avec ça ?<input id="cportions" inputmode="numeric" placeholder="Ex. 4" value="${calc.portions}" oninput="calc.portions=num(this.value);calcMaj()"></label>
+  <label class="field" for="cportions"><span id="cportlbl">${portLbl()}</span><input id="cportions" inputmode="numeric" placeholder="Ex. 4" value="${calc.portions}" oninput="calc.portions=num(this.value);calcMaj()"></label>
   <div id="calcres" class="restebox"></div>
   <button class="btn" onclick="toggleCalc()">Terminé</button></div>`;calcMaj()}
-function calcMaj(){const tot=calc.lignes.reduce((t,l)=>t+num(l.montant),0),n=num(calc.portions);const el=$('#calcres');
+function portLbl(){const n=($('#fnom')&&$('#fnom').value.trim())||'';return n?`Combien de « ${esc(n)} » vous obtenez avec ça ?`:"Combien d'articles à vendre vous obtenez avec ça ?"}
+function calcMaj(){const pl=$('#cportlbl');if(pl)pl.innerHTML=portLbl();const tot=calc.lignes.reduce((t,l)=>t+num(l.montant),0),n=num(calc.portions);const el=$('#calcres');
   if(!el)return;if(!tot||!n){el.innerHTML=`Total : <span class="amt">${fmt(tot)}</span><div class="sub">Indiquez combien d'unités vous obtenez.</div>`;return}
   const u=Math.round(tot/n);el.innerHTML=`<span class="amt">${fmt(tot)}</span> ÷ ${n} = <span class="amt">${fmt(u)}</span> par unité`;$('#fpa').value=u;majMarge()}
 function pickPhoto(inp){const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
@@ -1274,9 +1284,13 @@ async function boot(){
   S=st;
   if(S){if(!S.dirty&&S.mode==='compte'){S.dirty=blank();S.tomb=blank()}S.mvts=S.mvts||[];if(S.dirty){S.dirty.mvts=S.dirty.mvts||{};S.tomb.mvts=S.tomb.mvts||{}}recomputeStock()}
   {const h=location.hash.slice(1);if(S&&(h==='vente'||h==='achat'))view=h;if(h)history.replaceState(null,'',location.pathname)}
+  if(S)fixCadeaux();
   render();
   if(S&&S.mode==='compte'){sync();checkAdmin();verifCodeProvisoire()}
 }
+function fixCadeaux(){let n=0;S.ops.forEach(o=>{if(o.type!=='vente')return;let ch=false;
+  o.lignes.forEach(l=>{if(!l.offert&&!l.prix&&/\(cadeau\)\s*$/i.test(l.nom||'')){const a=A(l.aid);l.offert=true;l.nom=l.nom.replace(/\s*\(cadeau\)\s*$/i,'');if(a&&a.pv)l.prixNormal=a.pv;ch=true}});
+  if(ch){touch('ops',o.id);n++}});if(n)save()}
 // Vérifié après l'affichage, avec une limite de temps : l'écran ne reste jamais vide
 async function verifCodeProvisoire(){if(!sb)return;
   try{const r=await Promise.race([sb.auth.getSession(),new Promise(ok=>setTimeout(()=>ok(null),4000))]);
